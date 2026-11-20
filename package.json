@@ -6,7 +6,11 @@
     "doc": "docs"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run",
+    "dev": "vite",
+    "sim": "node scripts/sim.mjs",
+    "map": "node scripts/make-wood-map.mjs",
+    "build": "tsc --noEmit && vite build && node scripts/size.mjs"
   },
   "keywords": [],
   "author": "",

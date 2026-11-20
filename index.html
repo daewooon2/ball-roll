@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#20242c" />
+    <title>또르르 구슬 경주</title>
+    <meta name="description" content="이름을 넣고 구슬을 굴려 당첨자를 뽑는 3D 구슬 경주 추첨" />
+  </head>
+  <body>
+    <canvas id="view" aria-label="구슬 경주 화면"></canvas>
+    <div id="labels" aria-hidden="true"></div>
+
+    <ol id="rank" aria-label="순위"></ol>
+    <div id="banner" role="status" aria-live="polite" hidden></div>
+
+    <form id="panel" autocomplete="off">
+      <h1>또르르 구슬 경주</h1>
+      <label for="names">이름 <small>쉼표로 구분 · <code>이름*2</code> 구슬 2개 · <code>이름/3</code> 무게 3배</small></label>
+      <textarea id="names" rows="3" spellcheck="false"></textarea>
+      <p id="count" class="hint"></p>
+
+      <div class="row">
+        <fieldset>
+          <legend>당첨 기준</legend>
+          <label><input type="radio" name="win" value="first" checked /> 1등</label>
+          <label><input type="radio" name="win" value="last" /> 꼴찌</label>
+        </fieldset>
+        <label>당첨 수 <input id="winners" type="number" min="1" max="30" value="1" inputmode="numeric" /></label>
+      </div>
+      <div class="row">
+        <label>맵 <select id="map"></select></label>
+        <label
+          >화질
+          <select id="quality">
+            <option value="low">낮음</option>
+            <option value="normal" selected>보통</option>
+            <option value="high">높음</option>
+          </select>
+        </label>
+        <label><input id="skills" type="checkbox" /> 스킬(무작위 부스트)</label>
+      </div>
+      <div class="row">
+        <button id="shuffle" type="button">셔플</button>
+        <button id="start" type="submit" class="primary" disabled>불러오는 중…</button>
+      </div>
+      <div class="row small">
+        <span>시드 <code id="seed"></code></span>
+        <button id="share" type="button">링크 복사</button>
+        <button id="edit" type="button">맵 편집</button>
+      </div>
+      <p id="message" class="hint" role="alert"></p>
+    </form>
+
+    <div id="hud" hidden>
+      <button id="record" type="button" hidden>● 녹화</button>
+      <button id="again" type="button" hidden>다시 하기</button>
+    </div>
+
+    <dialog id="editor">
+      <form method="dialog">
+        <h2>맵 편집 (JSON)</h2>
+        <textarea id="editor-text" rows="18" spellcheck="false"></textarea>
+        <p id="editor-error" class="hint" role="alert"></p>
+        <div class="row">
+          <button id="editor-apply" type="button" class="primary">적용</button>
+          <button type="submit">닫기</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

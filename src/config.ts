@@ -11,7 +11,7 @@ export const WALL_THICKNESS = 0.01 * WORLD_SCALE;
 export const MAX_RACE_STEPS = STEPS_PER_SEC * 120; // 이 시간이 지나면 미완주 처리
 export const STUCK_SPEED = 0.01 * WORLD_SCALE; // 0.01 m/s
 export const STUCK_STEPS = 480; // 2초
-export const STUCK_KICK = 0.1 * WORLD_SCALE; // 0.1 m/s
+export const STUCK_KICK = 0.15 * WORLD_SCALE; // 0.15 m/s
 export const OOB_DISTANCE = 0.3 * WORLD_SCALE; // 중심선에서 이만큼 벗어나면 코스로 되돌린다
 export const START_JITTER = 0.005 * WORLD_SCALE; // 초기 속도 섭동 상한
 
