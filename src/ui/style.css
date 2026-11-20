@@ -245,9 +245,16 @@ code {
   display: flex;
   gap: 8px;
 }
-#record.on {
-  background: #b3261e;
-  border-color: #b3261e;
+#hud {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  left: 8px;
+  font-size: 14px;
+}
+#hud select {
+  padding: 6px 8px;
+  min-height: 40px;
 }
 
 dialog {

@@ -9,7 +9,7 @@ import {
   STUCK_STEPS,
   WORLD_SCALE,
 } from '../config';
-import { projectToCenterline, type BuiltMap } from '../map/build';
+import { moverPose, projectToCenterline, type BuiltMap } from '../map/build';
 import { applyRollingResistance } from '../physics/rolling';
 import { PhysicsWorld, type Body } from '../physics/world';
 import { makeRng, shuffle, type Rng } from '../rng';
@@ -57,6 +57,11 @@ export class Race {
   readonly pinAlive: Uint8Array;
   readonly gatePos = new Float32Array(3);
   readonly prevGatePos = new Float32Array(3);
+  /** 움직이는 장애물. 자세는 스텝 번호에서 계산한다. */
+  readonly moverPos: Float32Array;
+  readonly moverRot: Float32Array;
+  readonly prevMoverPos: Float32Array;
+  readonly prevMoverRot: Float32Array;
 
   /** 구슬 i의 출발 슬롯 */
   readonly slot: number[];
@@ -72,6 +77,7 @@ export class Race {
   private marbles: Body[] = [];
   private pinBodies: (Body | null)[] = [];
   private gate: Body;
+  private moverBodies: Body[] = [];
   private gateRot = new Float32Array(4);
   private marbleOf = new Map<number, number>(); // 충돌체 핸들 → 구슬 번호
   private finishHandle = -1;
@@ -139,6 +145,17 @@ export class Race {
       );
     }
 
+    const mn = map.movers.length;
+    this.moverPos = new Float32Array(mn * 3);
+    this.moverRot = new Float32Array(mn * 4);
+    map.movers.forEach((m, i) => {
+      moverPose(m, 0, this.moverPos, this.moverRot, i);
+      const at = (a: Float32Array, k: number, len: number) => Array.from(a.subarray(k * len, k * len + len));
+      this.moverBodies.push(this.world.addKinematic(m.colliders, at(this.moverPos, i, 3) as [number, number, number], at(this.moverRot, i, 4) as [number, number, number, number]));
+    });
+    this.prevMoverPos = this.moverPos.slice();
+    this.prevMoverRot = this.moverRot.slice();
+
     this.read();
     this.prevPos = this.pos.slice();
     this.prevRot = this.rot.slice();
@@ -180,6 +197,12 @@ export class Race {
       const g = map.gate;
       this.gate.moveTo([g.pos[0] + g.up[0] * k, g.pos[1] + g.up[1] * k, g.pos[2] + g.up[2] * k]);
     }
+    this.prevMoverPos.set(this.moverPos);
+    this.prevMoverRot.set(this.moverRot);
+    map.movers.forEach((m, i) => {
+      moverPose(m, this.step + 1, this.moverPos, this.moverRot, i);
+      this.moverBodies[i].poseTo(this.moverPos, this.moverRot, i);
+    });
     if (map.marble.rolling > 0)
       this.marbles.forEach((b, i) => applyRollingResistance(world, b, r, map.marble.rolling, !Number.isNaN(this.finishTime[i])));
 

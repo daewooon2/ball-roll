@@ -1,5 +1,5 @@
 // three.js 장면. race의 상태를 읽기만 한다.
-// 드로콜: 나무 1 + 소용돌이 1 + 쐐기 1 + 구슬 1 + 핀 1 + 그림자 1 + 게이트 1 = 7
+// 드로콜: 나무 1 + 소용돌이 1 + 쐐기 1 + 구슬 1 + 핀 1 + 그림자 1 + 게이트 1 + 움직이는 장애물마다 1 = 11 (목표 20 이하)
 import {
   BoxGeometry,
   BufferAttribute,
@@ -82,6 +82,46 @@ const marbleTexture = () =>
     for (let i = 0; i < 4; i++) c.fillRect(i * 32 + 10, 29, 12, 6);
   });
 
+// 소용돌이 무늬: 번갈아 칠한 동심원 띠 + 나선 세 줄 + 배출구 둘레의 붉은 고리
+const funnelTexture = () =>
+  canvasTexture(512, 512, (c) => {
+    const bands = 9;
+    for (let i = 0; i < bands; i++) {
+      c.fillStyle = i % 2 ? '#b98448' : '#e0b074';
+      c.beginPath();
+      c.arc(256, 256, 256 * (1 - i / bands) + 1, 0, 2 * Math.PI);
+      c.fill();
+    }
+    c.lineCap = 'round';
+    for (let arm = 0; arm < 3; arm++) {
+      c.strokeStyle = 'rgba(70, 38, 14, 0.75)';
+      c.lineWidth = 7;
+      c.beginPath();
+      for (let t = 0.08; t <= 1; t += 0.01) {
+        const a = (arm * 2 * Math.PI) / 3 + t * 2.2 * Math.PI;
+        c.lineTo(256 + Math.cos(a) * t * 250, 256 + Math.sin(a) * t * 250);
+      }
+      c.stroke();
+    }
+    c.strokeStyle = '#d2362b';
+    c.lineWidth = 9;
+    c.beginPath();
+    c.arc(256, 256, 34, 0, 2 * Math.PI);
+    c.stroke();
+  });
+
+/** 점 6개(아래 삼각형 0-2, 위 삼각형 3-5) → 윗면 + 옆면 3개. 면마다 법선이 따로라 인덱스 없이 만든다. */
+function prismGeometry(points: number[], color: string) {
+  const p = (i: number) => points.slice(i * 3, i * 3 + 3);
+  const tris = [3, 4, 5, 0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4, 2, 0, 3, 2, 3, 5].flatMap(p);
+  const g = new BufferGeometry();
+  g.setAttribute('position', new BufferAttribute(new Float32Array(tris), 3));
+  g.computeVertexNormals();
+  const rgb = new Color(WEDGE_COLORS[color] ?? color).toArray();
+  g.setAttribute('color', new BufferAttribute(new Float32Array(tris.length).map((_, i) => rgb[i % 3]), 3));
+  return g;
+}
+
 const blobTexture = () =>
   canvasTexture(64, 64, (c) => {
     const g = c.createRadialGradient(32, 32, 2, 32, 32, 32);
@@ -103,6 +143,7 @@ export class Scene {
   private pins?: InstancedMesh;
   private blobs?: InstancedMesh;
   private gate?: Mesh;
+  private movers: Mesh[] = [];
   private quality = QUALITY.normal;
   /** 이번 프레임에 그린(보간된) 구슬 위치. 이름표와 카메라가 읽는다. */
   renderPos = new Float32Array(0);
@@ -176,16 +217,7 @@ export class Scene {
         g.translate(v.pos[0], v.pos[1], v.pos[2]);
         boxes.push(g);
       } else if (v.kind === 'prism') {
-        // 점 6개(아래 삼각형 0-2, 위 삼각형 3-5) → 윗면 + 옆면 3개. 면마다 법선이 따로라 인덱스 없이 만든다.
-        const p = (i: number) => v.points.slice(i * 3, i * 3 + 3);
-        const tris = [3, 4, 5, 0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4, 2, 0, 3, 2, 3, 5].flatMap(p);
-        const g = new BufferGeometry();
-        g.setAttribute('position', new BufferAttribute(new Float32Array(tris), 3));
-        g.computeVertexNormals();
-        const c = new Color(WEDGE_COLORS[v.color] ?? v.color);
-        const rgb = c.toArray();
-        g.setAttribute('color', new BufferAttribute(new Float32Array(tris.length).map((_, i) => rgb[i % 3]), 3));
-        prisms.push(g);
+        prisms.push(prismGeometry(v.points, v.color));
       } else {
         const g = new BufferGeometry();
         g.setAttribute('position', new BufferAttribute(new Float32Array(v.vertices), 3));
@@ -201,7 +233,15 @@ export class Scene {
         const shade = new Float32Array(v.vertices.length);
         for (let i = 0; i < shade.length; i += 3) shade.fill(0.35 + (0.65 * (v.vertices[i + 1] - lo)) / (hi - lo), i, i + 3);
         g.setAttribute('color', new BufferAttribute(shade, 3));
-        add(new Mesh(g, new MeshStandardMaterial({ color: 0xd6a066, roughness: 0.7, side: DoubleSide, vertexColors: true })));
+        // 위에서 본 평면 투영으로 무늬를 입힌다(이음매가 없다). 구슬이 도는 게 무늬를 기준으로 보인다.
+        const f = map.funnel!;
+        const uv = new Float32Array((v.vertices.length / 3) * 2);
+        for (let i = 0, k = 0; i < v.vertices.length; i += 3, k += 2) {
+          uv[k] = (v.vertices[i] - f.center[0]) / (2 * f.rOuter) + 0.5;
+          uv[k + 1] = (v.vertices[i + 2] - f.center[2]) / (2 * f.rOuter) + 0.5;
+        }
+        g.setAttribute('uv', new BufferAttribute(uv, 2));
+        add(new Mesh(g, new MeshStandardMaterial({ map: funnelTexture(), roughness: 0.7, side: DoubleSide, vertexColors: true })));
       }
     }
     if (boxes.length) add(new Mesh(mergeGeometries(boxes), this.wood));
@@ -250,6 +290,19 @@ export class Scene {
       this.blobs.frustumCulled = false;
     } else this.blobs = undefined;
 
+    this.movers = map.movers.map(({ visual }) => {
+      let mesh: Mesh;
+      if (visual.kind === 'prism') {
+        mesh = new Mesh(prismGeometry(visual.points, visual.color), new MeshStandardMaterial({ vertexColors: true, roughness: 0.6, side: DoubleSide }));
+      } else {
+        const [ox, oy, oz] = visual.offset;
+        const parts = visual.halves.map((h) => new BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2).translate(ox, oy, oz));
+        mesh = new Mesh(mergeGeometries(parts), new MeshStandardMaterial({ color: WEDGE_COLORS[visual.color] ?? visual.color, roughness: 0.5 }));
+      }
+      mesh.castShadow = true;
+      return add(mesh);
+    });
+
     const g = map.gate;
     this.gate = add(new Mesh(new BoxGeometry(g.half[0] * 2, g.half[1] * 2, g.half[2] * 2), new MeshStandardMaterial({ color: 0x2f3742 })));
     this.gate.quaternion.fromArray(g.rot);
@@ -290,6 +343,11 @@ export class Scene {
       }
       this.pins.instanceMatrix.needsUpdate = true;
     }
+    this.movers.forEach((mesh, i) => {
+      const k = i * 3;
+      mesh.position.set(lerp(race.prevMoverPos, race.moverPos, k), lerp(race.prevMoverPos, race.moverPos, k + 1), lerp(race.prevMoverPos, race.moverPos, k + 2));
+      mesh.quaternion.fromArray(race.prevMoverRot, i * 4).slerp(q1.fromArray(race.moverRot, i * 4), alpha);
+    });
     this.gate!.position.set(lerp(race.prevGatePos, race.gatePos, 0), lerp(race.prevGatePos, race.gatePos, 1), lerp(race.prevGatePos, race.gatePos, 2));
 
     if (this.quality.shadowMap) {

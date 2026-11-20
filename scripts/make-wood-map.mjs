@@ -22,8 +22,9 @@ function make(P) {
       type: 'ramp', id, pos: [x, y, 0], yawDeg: dir > 0 ? 0 : 180, slopeDeg: t.slope,
       length, width: P.width, railH: P.railH, ...(i ? {} : { backWall: 0.03 }),
     });
-    for (const [along, across, size] of t.wedges ?? []) {
+    for (const [along, across, size, slide] of t.wedges ?? []) {
       const wedge = { type: 'wedge', on: id, at: [along, across], size: size ?? P.wedge, color: COLORS[color++ % COLORS.length] };
+      if (slide) wedge.slide = slide;
       if (across === 'L' || across === 'R') {
         // 난간에 붙는 쐐기: 빗면 하나가 난간과 나란하도록 반각만큼 돌려, 난간을 타고 오는 구슬을 안쪽으로 밀어낸다
         const side = across === 'R' ? 1 : -1;
@@ -34,6 +35,8 @@ function make(P) {
       }
       pieces.push(wedge);
     }
+    for (const [along, across, rpm] of t.spinners ?? [])
+      pieces.push({ type: 'spinner', on: id, at: [along, across], length: 0.06, rpm, cross: true, color: COLORS[color++ % COLORS.length] });
     if (t.pins)
       pieces.push({
         type: 'pins', on: id, at: [t.pins[0], 0], layout: t.pins[1], spacing: 0.02, radius: 0.004, height: 0.022,
@@ -134,18 +137,15 @@ const maps = [
     tiers: [
       { slope: 3.2, length: 0.8, pins: [0.34, '9-8-9'] },
       { slope: 3.2, length: 0.8, wedges: [...ROW_A(0.3, [0.019, 0.015, 0.04]), ...ROW_B(0.55)] },
-      { slope: 3.2, length: 0.8, wedges: [...ROW_A(0.3), ...ROW_B(0.55)] },
-      { slope: 3.2, length: 0.8, wedges: ROW_A(0.4) },
+      // 움직이는 장애물은 출발 슬롯의 흔적이 섞인 뒤(셋째 단부터)에 좌우 대칭으로 둔다.
+      // 십자 스피너 한 쌍은 서로 반대로 돌고, 왕복 쐐기 한 쌍은 거울처럼 움직인다.
+      // 스피너 끝과 난간 사이는 18mm, 왕복 쐐기와 난간 사이는 최소 23mm라 구슬(16mm)이 눌리지 않는다.
+      { slope: 3.2, length: 0.8, spinners: [[0.33, -0.042, 40], [0.33, 0.042, -40]], wedges: ROW_B(0.62) },
+      {
+        slope: 3.2, length: 0.8,
+        wedges: [...ROW_A(0.3), [0.58, -0.04, undefined, { amp: -0.012, period: 2 }], [0.58, 0.04, undefined, { amp: 0.012, period: 2 }]],
+      },
       { slope: 3.2, length: 0.8, pins: [0.45, '4-3-2-1'] },
-    ],
-  },
-  {
-    // 계획서의 3단 구성 그대로인 짧은 코스. 15초 안팎에 끝난다(1,000시드 튜닝은 하지 않았다).
-    ...common, id: 'wood-short', name: '짧은 나무 코스 (3단)',
-    tiers: [
-      { slope: 5, length: 0.8, pins: [0.34, '9-8-9'] },
-      { slope: 5, length: 0.8, wedges: [...ROW_A(0.3), ...ROW_B(0.55)] },
-      { slope: 5, length: 0.8, pins: [0.45, '4-3-2-1'] },
     ],
   },
 ];

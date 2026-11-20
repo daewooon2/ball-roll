@@ -53,7 +53,17 @@
     </form>
 
     <div id="hud" hidden>
-      <button id="record" type="button" hidden>● 녹화</button>
+      <label
+        >배속
+        <select id="speed">
+          <option value="1">1x</option>
+          <option value="1.5" selected>1.5x</option>
+          <option value="2">2x</option>
+          <option value="3">3x</option>
+        </select>
+      </label>
+      <button id="pause" type="button" aria-pressed="false">⏸ 일시정지</button>
+      <button id="stop" type="button">■ 종료</button>
       <button id="again" type="button" hidden>다시 하기</button>
     </div>
 

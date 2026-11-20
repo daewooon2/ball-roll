@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { buildMap, projectToCenterline } from '../map/build';
+import { buildMap, moverPose, projectToCenterline } from '../map/build';
 import { validateMap } from '../map/schema';
 import { Race } from './race';
 
@@ -44,9 +44,8 @@ describe('경주', () => {
 });
 
 describe('확장 기능', () => {
-  const short = JSON.parse(fs.readFileSync('public/maps/wood-short.json', 'utf8'));
   const run2 = () => {
-    const race = new Race(buildMap(validateMap(short)), {
+    const race = new Race(buildMap(validateMap(json)), {
       seed: 77,
       skills: true,
       entries: [
@@ -62,12 +61,33 @@ describe('확장 기능', () => {
     return out;
   };
 
-  it('다른 맵 JSON, 가중치, 스킬, 여러 명 당첨이 같은 시드에서 재현된다', () => {
+  it('가중치, 스킬, 여러 명 당첨이 같은 시드에서 재현된다', () => {
     const a = run2();
     expect(run2()).toEqual(a);
     expect(a.order).toHaveLength(3);
     expect(a.boosts).toBeGreaterThan(0);
     expect(a.first).toEqual(a.order.slice(0, 2));
     expect(a.last).toEqual([a.order[2], a.order[1]]);
+  });
+});
+
+describe('움직이는 장애물', () => {
+  it('자세가 스텝 번호만으로 정해지고 주기적으로 되돌아온다', () => {
+    const map = buildMap(validateMap(json));
+    expect(map.movers.length).toBeGreaterThan(0);
+    const slider = map.movers.find((m) => m.slide)!;
+    const spinner = map.movers.find((m) => m.spin)!;
+    const pose = (m: typeof slider, step: number) => {
+      const pos = [0, 0, 0];
+      const rot = [0, 0, 0, 0];
+      moverPose(m, step, pos, rot, 0);
+      return [...pos, ...rot];
+    };
+    const near = (a: number[], b: number[]) => a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
+    expect(near(pose(slider, 0), pose(slider, slider.slide!.period))).toBe(true);
+    expect(near(pose(slider, 0), pose(slider, slider.slide!.period / 4))).toBe(false);
+    expect(near(pose(spinner, 0), pose(spinner, 1))).toBe(false);
+    // 왕복 쐐기는 구슬(지름 0.16)이 눌리지 않을 만큼만 움직인다
+    expect(Math.abs(slider.slide!.amp)).toBeLessThan(0.2);
   });
 });

@@ -26,6 +26,30 @@ export interface PinSpec {
   despawnY: number;
 }
 
+/** 움직이는 장애물(운동학 강체). 자세는 스텝 번호만으로 정해진다. */
+export interface MoverSpec {
+  /** 강체 기준 로컬 충돌체 */
+  colliders: ColliderSpec[];
+  visual: { kind: 'prism'; points: number[]; color: string } | { kind: 'boxes'; halves: Vec3[]; offset: Vec3; color: string };
+  pos: Vec3;
+  rot: Quat;
+  /** 0~1. 한 주기 안에서의 시작 위치 */
+  phase: number;
+  /** 로컬 y축 둘레 회전(rad/스텝) */
+  spin?: number;
+  /** dir 방향으로 amp·sin 왕복. period는 스텝 수 */
+  slide?: { dir: Vec3; amp: number; period: number };
+}
+
+/** step 스텝째의 자세를 배열의 i번째 칸에 쓴다. */
+export function moverPose(m: MoverSpec, step: number, pos: Float32Array | number[], rot: Float32Array | number[], i: number) {
+  const k = m.slide ? m.slide.amp * Math.sin(2 * Math.PI * (step / m.slide.period + m.phase)) : 0;
+  for (let a = 0; a < 3; a++) pos[i * 3 + a] = m.pos[a] + (m.slide ? m.slide.dir[a] * k : 0);
+  const angle = m.spin ? m.spin * step + m.phase * 2 * Math.PI : 0;
+  const q = m.spin ? qmul(m.rot, [0, Math.sin(angle / 2), 0, Math.cos(angle / 2)]) : m.rot;
+  for (let a = 0; a < 4; a++) rot[i * 4 + a] = q[a];
+}
+
 export interface BuiltMap {
   id: string;
   material: Material;
@@ -38,6 +62,7 @@ export interface BuiltMap {
   floorY: number;
   visuals: Visual[];
   pins: PinSpec[];
+  movers: MoverSpec[];
   gate: { pos: Vec3; rot: Quat; half: Vec3; up: Vec3; lift: number; liftSteps: number };
   /** n개 중 k번째 출발 슬롯의 구슬 위치 */
   slotPosition(k: number, n: number): Vec3;
@@ -91,6 +116,7 @@ export function buildMap(json: MapJson): BuiltMap {
   const statics: ColliderSpec[] = [];
   const visuals: Visual[] = [];
   const pins: PinSpec[] = [];
+  const movers: MoverSpec[] = [];
   const line: Vec3[] = [];
   const frames = new Map<string, Frame>();
   const ramps = new Map<string, RampPiece>();
@@ -142,17 +168,47 @@ export function buildMap(json: MapJson): BuiltMap {
         const base = frames.get(p.on)!;
         const f = new Frame(base.at([p.at[0] * S, 0, p.at[1] * S]), qmul(base.rot, qYaw(p.yawDeg ?? 0)));
         const [w, h, l] = scale(p.size);
-        const points: number[] = [];
-        // 꼭짓점이 오르막(-x)을 향한다. 판에 2mm 묻어 틈을 없앤다.
-        for (const y of [-0.002 * S, h])
+        const local: Vec3[] = [];
+        // 꼭짓점이 오르막(-x)을 향한다. 고정 쐐기는 판에 2mm 묻어 틈을 없애고, 움직이는 쐐기는 1mm 띄운다.
+        for (const y of [(p.slide ? 0.001 : -0.002) * S, h])
           for (const [x, z] of [
             [-l / 2, 0],
             [l / 2, -w / 2],
             [l / 2, w / 2],
           ])
-            points.push(...f.at([x, y, z]));
-        statics.push({ shape: { kind: 'hull', points }, pos: [0, 0, 0] });
-        visuals.push({ kind: 'prism', points, color: p.color ?? 'red' });
+            local.push([x, y, z]);
+        const color = p.color ?? 'red';
+        if (p.slide) {
+          const points = local.flat();
+          movers.push({
+            colliders: [{ shape: { kind: 'hull', points }, pos: [0, 0, 0] }],
+            visual: { kind: 'prism', points, color },
+            pos: f.origin,
+            rot: f.rot,
+            phase: p.slide.phase ?? 0,
+            slide: { dir: base.dir([0, 0, 1]), amp: p.slide.amp * S, period: p.slide.period / DT },
+          });
+        } else {
+          const points = local.flatMap((v) => f.at(v));
+          statics.push({ shape: { kind: 'hull', points }, pos: [0, 0, 0] });
+          visuals.push({ kind: 'prism', points, color });
+        }
+        break;
+      }
+      case 'spinner': {
+        // 판의 법선을 축으로 도는 막대(또는 십자). 바닥에서 1mm 떠 있다.
+        const base = frames.get(p.on)!;
+        const half: Vec3 = [(p.length * S) / 2, 0.0075 * S, 0.004 * S];
+        const offset: Vec3 = [0, half[1] + 0.001 * S, 0];
+        const halves: Vec3[] = p.cross ? [half, [half[2], half[1], half[0]]] : [half];
+        movers.push({
+          colliders: halves.map((h) => ({ shape: { kind: 'box', half: h }, pos: offset })),
+          visual: { kind: 'boxes', halves, offset, color: p.color ?? 'red' },
+          pos: base.at([p.at[0] * S, 0, p.at[1] * S]),
+          rot: base.rot,
+          phase: p.phase ?? 0,
+          spin: ((p.rpm * 2 * Math.PI) / 60) * DT,
+        });
         break;
       }
       case 'pins': {
@@ -251,6 +307,7 @@ export function buildMap(json: MapJson): BuiltMap {
     floorY,
     visuals,
     pins,
+    movers,
     gate: {
       pos: sf.at([at, barHalf[1], 0]),
       rot: sf.rot,

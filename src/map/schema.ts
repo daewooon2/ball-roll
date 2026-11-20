@@ -37,6 +37,20 @@ export interface WedgePiece {
   size: V3;
   color?: string;
   yawDeg?: number;
+  /** 옆으로 왕복한다. amp = 진폭(m), period = 주기(초), phase = 0~1. */
+  slide?: { amp: number; period: number; phase?: number };
+}
+
+/** 판 위에서 도는 막대. length = 막대 전체 길이, rpm의 부호가 회전 방향, cross면 십자. */
+export interface SpinnerPiece {
+  type: 'spinner';
+  on: string;
+  at: [number, number];
+  length: number;
+  rpm: number;
+  cross?: boolean;
+  phase?: number;
+  color?: string;
 }
 
 /** 볼링핀. layout "4-3-2-1"은 내리막 쪽 줄부터 센 핀 개수다(맨 위 1개가 먼저 맞는다). */
@@ -75,7 +89,7 @@ export interface FinishPiece {
   tray: V3;
 }
 
-export type Piece = RampPiece | DropPiece | WedgePiece | PinsPiece | FunnelPiece | FinishPiece;
+export type Piece = RampPiece | DropPiece | WedgePiece | SpinnerPiece | PinsPiece | FunnelPiece | FinishPiece;
 
 export interface MapJson {
   id: string;
@@ -112,6 +126,12 @@ const FIELDS: Record<Piece['type'], [string, (v: unknown) => boolean][]> = {
     ['on', (v) => typeof v === 'string'],
     ['at', (v) => vec(v, 2)],
     ['size', vec],
+  ],
+  spinner: [
+    ['on', (v) => typeof v === 'string'],
+    ['at', (v) => vec(v, 2)],
+    ['length', num],
+    ['rpm', num],
   ],
   pins: [
     ['on', (v) => typeof v === 'string'],
@@ -158,7 +178,8 @@ export function validateMap(data: unknown): MapJson {
     for (const [key, ok] of fields)
       if (!ok((p as unknown as Record<string, unknown>)[key])) fail(`pieces[${i}] (${p.type}).${key}`);
     if (p.type === 'ramp') ramps.add(p.id);
-    if ((p.type === 'wedge' || p.type === 'pins') && !ramps.has(p.on))
+    if (p.type === 'wedge' && p.slide && !(num(p.slide.amp) && num(p.slide.period) && p.slide.period > 0)) fail(`pieces[${i}] (wedge).slide`);
+    if ((p.type === 'wedge' || p.type === 'pins' || p.type === 'spinner') && !ramps.has(p.on))
       fail(`pieces[${i}] (${p.type}).on = "${p.on}" 인 경사판이 앞에 없음`);
   });
   if (!ramps.has(m.start.on)) fail(`start.on = "${m.start.on}"`);

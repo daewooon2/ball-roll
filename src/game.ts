@@ -14,6 +14,9 @@ export class Game {
   private labels: HTMLElement[] = [];
   private acc = 0;
   private last = 0;
+  /** 배속. 물리 스텝은 그대로 1/240초이고 한 프레임에 도는 스텝 수만 바뀐다. */
+  speed = 1.5;
+  paused = false;
   /** 프레임마다 불린다(순위 UI 갱신용). */
   onFrame?: (race: Race) => void;
 
@@ -51,6 +54,7 @@ export class Game {
       })),
     );
     this.acc = 0;
+    this.paused = false;
     this.follow.snap();
   }
 
@@ -65,16 +69,18 @@ export class Game {
     this.last = now;
     const race = this.race;
     if (!race) return;
-    if (race.started && !race.done) {
-      this.acc += frameDt;
-      for (let steps = 0; this.acc >= DT && steps < 16; steps++) {
+    if (race.started && !race.done && !this.paused) {
+      // 선두가 배출구 앞에 오면(아직 아무도 못 들어왔을 때) 잠깐 느리게
+      this.acc += frameDt * this.speed * (this.follow.climax ? 0.4 : 1);
+      const maxSteps = 16 * Math.max(1, Math.ceil(this.speed));
+      for (let steps = 0; this.acc >= DT && steps < maxSteps; steps++) {
         race.tick();
         this.acc -= DT;
       }
-      if (this.acc >= DT) this.acc = 0; // 16스텝으로도 못 따라가면 밀린 시간은 버린다
+      if (this.acc >= DT) this.acc = 0; // 그래도 못 따라가면 밀린 시간은 버린다
     }
     const alpha = race.started && !race.done ? this.acc / DT : 1;
-    this.follow.update(race, race.pos, frameDt);
+    this.follow.update(race, race.pos, this.paused ? 0 : frameDt);
     this.scene.render(race, alpha, this.follow.target);
 
     const p = { x: 0, y: 0 };

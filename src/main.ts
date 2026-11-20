@@ -25,7 +25,7 @@ const randomSeed = () => crypto.getRandomValues(new Uint32Array(1))[0];
 // ---- URL ↔ 상태. 같은 빌드에서 같은 링크는 같은 경주를 재생한다. ----
 const url = new URLSearchParams(location.search);
 let seed = parseSeed(url.get('seed')) ?? randomSeed();
-names.value = url.get('names') ?? '수박*2, 키위*2, 참외';
+names.value = url.get('names') ?? '수박, 키위, 참외, 포도, 자두';
 if (url.get('win') === 'last') panel.querySelector<HTMLInputElement>('input[value=last]')!.checked = true;
 winnersInput.value = String(Math.max(1, +(url.get('n') ?? 1) || 1));
 skillsBox.checked = url.get('skills') === '1';
@@ -97,7 +97,10 @@ function drawRank(race: Race) {
     banner.textContent = `🎉 당첨: ${winners.map((m) => entries[m].name).join(', ')}`;
     banner.hidden = false;
   }
-  if (race.done) $('again').hidden = false;
+  if (race.done) {
+    $('again').hidden = false;
+    $('pause').hidden = true;
+  }
 }
 
 async function boot() {
@@ -160,6 +163,9 @@ panel.addEventListener('submit', (e) => {
   $('hud').hidden = false;
   $('again').hidden = true;
   layout();
+  applySpeed();
+  setPaused(false);
+  pauseButton.hidden = false;
   game.start();
 });
 $('again').addEventListener('click', () => {
@@ -181,10 +187,42 @@ $('share').addEventListener('click', async () => {
   setTimeout(() => ($('share').textContent = '링크 복사'), 1500);
 });
 
-// 녹화와 맵 편집은 누를 때 불러온다
-const recordButton = $<HTMLButtonElement>('record');
-recordButton.hidden = !('MediaRecorder' in window && 'captureStream' in HTMLCanvasElement.prototype);
-recordButton.addEventListener('click', async () => (await import('./ui/record')).toggleRecording($<HTMLCanvasElement>('view'), recordButton));
+// ---- 경주 중 조작: 배속, 일시정지, 종료 ----
+const speedSelect = $<HTMLSelectElement>('speed');
+const pauseButton = $<HTMLButtonElement>('pause');
+try {
+  const saved = localStorage.getItem('speed');
+  if (saved && [...speedSelect.options].some((o) => o.value === saved)) speedSelect.value = saved;
+} catch {
+  // 저장소를 못 쓰는 환경이면 기본 배속
+}
+const applySpeed = () => {
+  if (game) game.speed = +speedSelect.value;
+};
+speedSelect.addEventListener('change', () => {
+  applySpeed();
+  try {
+    localStorage.setItem('speed', speedSelect.value);
+  } catch {
+    // 무시
+  }
+});
+function setPaused(paused: boolean) {
+  if (game) game.paused = paused;
+  pauseButton.textContent = paused ? '▶ 계속' : '⏸ 일시정지';
+  pauseButton.setAttribute('aria-pressed', String(paused));
+}
+pauseButton.addEventListener('click', () => setPaused(!game?.paused));
+// 종료: 경주를 그만두고 같은 시드로 출발선에 다시 세운다
+$('stop').addEventListener('click', () => {
+  panel.hidden = false;
+  $('hud').hidden = true;
+  rank.replaceChildren();
+  prepare();
+  layout();
+});
+
+// 맵 편집은 누를 때 불러온다
 $('edit').addEventListener('click', async () =>
   (await import('./ui/editor')).openEditor(mapJson, (json) => {
     game!.loadMap(json); // 형식이 틀리면 던진다 → 편집기가 오류를 보여 준다

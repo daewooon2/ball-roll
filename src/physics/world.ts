@@ -84,6 +84,11 @@ export class Body {
   moveTo(pos: Vec3) {
     this.rb.setNextKinematicTranslation(v3(pos));
   }
+  /** 운동학 강체 전용: 다음 스텝의 자세(배열의 i번째 칸에서 읽는다). */
+  poseTo(pos: Float32Array, rot: Float32Array, i: number) {
+    this.rb.setNextKinematicTranslation({ x: pos[i * 3], y: pos[i * 3 + 1], z: pos[i * 3 + 2] });
+    this.rb.setNextKinematicRotation({ x: rot[i * 4], y: rot[i * 4 + 1], z: rot[i * 4 + 2], w: rot[i * 4 + 3] });
+  }
 }
 
 export class PhysicsWorld {
