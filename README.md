@@ -14,7 +14,8 @@ npm run test                 # 단위 테스트
 npm run sim -- --seeds 1000  # 헤드리스 시뮬레이션
 ```
 
-배포는 `dist/` 를 GitHub Pages 같은 정적 호스팅에 올리면 된다(`base: './'`).
+배포: GitHub 저장소에 올리면 `.github/workflows/deploy.yml` 이 master 에 푸시할 때마다 테스트 → 빌드 → GitHub Pages 배포를 한다.
+처음 한 번만 저장소 Settings → Pages → Source 를 "GitHub Actions" 로 바꾼다. 주소는 `https://<아이디>.github.io/<저장소 이름>/` 이다(`base: './'` 라 하위 경로에서도 돈다).
 
 ## 기능
 
