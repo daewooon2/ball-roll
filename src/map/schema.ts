@@ -1,160 +1,141 @@
-// 코스 JSON 형식. 길이는 전부 m, 각도는 도.
-export type V3 = [number, number, number];
+// 코스 JSON 형식. 뒤로 기울인 판 위를 구슬이 굴러 내려간다.
+// 좌표는 판 위의 2차원 [x, y] (m). x = 가로(가운데 0), y = 위쪽이 +. 각도는 도.
+export type V2 = [number, number];
 
-/** 경사판. pos = 윗면의 위쪽(오르막) 끝 가운데. yaw 0이면 +x, 90이면 +z 방향으로 내려간다. */
-export interface RampPiece {
-  type: 'ramp';
-  id: string;
-  pos: V3;
-  yawDeg: number;
-  slopeDeg: number;
-  length: number;
-  width: number;
-  railH: number;
-  /** 난간 높이를 [로컬 -z쪽, +z쪽]으로 따로 줄 때. 0이면 없음. */
-  rails?: [number, number];
-  /** 오르막 끝을 막는 벽 높이. */
-  backWall?: number;
-  /** 바닥 충돌체 두께. 기본 30mm(터널링 방지). 아래로 구슬이 지나가야 하는 곳만 줄인다. */
-  thickness?: number;
-}
-
-/** 낙하구를 감싸는 ㄷ자 벽. pos = 입구 쪽 바닥 가운데, size = [길이, 높이, 폭]. */
-export interface DropPiece {
-  type: 'drop';
-  pos: V3;
-  yawDeg: number;
-  size: V3;
-  /** 옆벽 한쪽을 뚫을 때(로컬 z 방향). */
-  open?: '+z' | '-z';
-}
-
-/** 삼각기둥 쐐기. 경사판 위에 놓는다. at = [오르막 끝에서의 거리, 가운데에서 옆으로]. size = [밑변, 높이, 길이]. */
-export interface WedgePiece {
-  type: 'wedge';
-  on: string;
-  at: [number, number];
-  size: V3;
+/** 두 점을 잇는 벽. t = 두께(기본 6mm). */
+export interface WallPiece {
+  type: 'wall';
+  a: V2;
+  b: V2;
+  t?: number;
+  /** 끝을 두께의 반만큼 늘리지 않고 a, b에서 딱 자른다. 두꺼운 벽끼리 모서리를 맞출 때 쓴다. */
+  flush?: boolean;
+  /** 결승 깔때기 벽: 너무 오래 걸리면 사라지는 안전망. */
+  trap?: boolean;
+  /** 닿은 구슬을 벽 반대쪽으로 이 속력(m/s)으로 밀어낸다. 벽을 따라 쓸려 가는 구슬도 튕긴다. */
+  pop?: number;
+  /** 반발 계수. 주면 잘 튕기는 벽이 된다. */
+  bounce?: number;
   color?: string;
-  yawDeg?: number;
-  /** 옆으로 왕복한다. amp = 진폭(m), period = 주기(초), phase = 0~1. */
-  slide?: { amp: number; period: number; phase?: number };
 }
 
-/** 판 위에서 도는 막대. length = 막대 전체 길이, rpm의 부호가 회전 방향, cross면 십자. */
+/** 고정 블록. size = [가로, 세로], deg = 판 위에서 돌린 각. */
+export interface BoxPiece {
+  type: 'box';
+  at: V2;
+  size: V2;
+  deg?: number;
+  color?: string;
+}
+
+/** 둥근 핀. bounce를 주면 그만큼 잘 튕기는 범퍼가 된다(반발 계수). */
+export interface PegPiece {
+  type: 'peg';
+  at: V2;
+  r: number;
+  bounce?: number;
+  /** 핀볼의 팝 범퍼: 닿은 구슬을 이 속력(m/s)으로 바깥으로 튕겨 낸다. */
+  pop?: number;
+  color?: string;
+}
+
+/** 도는 막대. length = 막대 전체 길이, rpm의 부호가 회전 방향, cross면 십자. */
 export interface SpinnerPiece {
   type: 'spinner';
-  on: string;
-  at: [number, number];
+  at: V2;
   length: number;
   rpm: number;
   cross?: boolean;
+  /** true면 at이 막대의 한쪽 끝(축)이고 막대는 그 끝에서 length만큼 뻗는다. 축을 벽에 박아 반대쪽 끝만 보이게 할 때. */
+  end?: boolean;
+  /** 막대 두께(m). 기본 8mm */
+  thick?: number;
+  /** 막대 양 끝 이 길이(m)만큼을 잘 튕기는 빨간 끝으로 만든다 */
+  tips?: number;
+  /** 주면 중심에서 이만큼의 팔이 고르게 뻗는다(3이면 Y자). 팔 하나의 길이는 length/2. */
+  arms?: number;
   phase?: number;
   color?: string;
 }
 
-/** 볼링핀. layout "4-3-2-1"은 내리막 쪽 줄부터 센 핀 개수다(맨 위 1개가 먼저 맞는다). */
-export interface PinsPiece {
-  type: 'pins';
-  on: string;
-  at: [number, number];
-  layout: string;
-  spacing: number;
-  radius: number;
-  height: number;
-  /** 핀 질량 / 구슬 질량 */
-  massRatio: number;
-  /** 핀의 마찰. 0이면 쓰러진 핀이 경사를 미끄러져 내려가 길을 비운다. 생략하면 구슬과 같다. */
-  friction?: number;
-  /** 핀이 놓인 자리보다 이만큼 떨어지면 제거한다(소용돌이 배출구가 막히지 않게). */
-  despawnDrop: number;
+/** 좌우로 왕복하는 블록. amp = 진폭(m), period = 주기(초), phase = 0~1. */
+export interface SliderPiece {
+  type: 'slider';
+  at: V2;
+  size: V2;
+  deg?: number;
+  amp: number;
+  period: number;
+  phase?: number;
+  color?: string;
 }
 
-/** 원뿔 소용돌이. pos = 배출구 가운데. */
-export interface FunnelPiece {
-  type: 'funnel';
-  pos: V3;
-  rOuter: number;
-  rInner: number;
-  angleDeg: number;
-  segments: number;
-  rimH: number;
+/** 구멍 함정: 구슬 중심이 반지름 r 안에 들어오면 빠져서 to(구간 맨 위)로 되돌아간다. 구슬 하나당 max번까지. */
+export interface HolePiece {
+  type: 'hole';
+  at: V2;
+  r: number;
+  to: V2;
+  max?: number;
 }
 
-/** 결승 센서와 받침 상자. pos = 센서 가운데, size = 센서 크기, tray = [폭, 깊이, 길이]. */
-export interface FinishPiece {
-  type: 'finish';
-  pos: V3;
-  size: V3;
-  tray: V3;
-}
-
-export type Piece = RampPiece | DropPiece | WedgePiece | SpinnerPiece | PinsPiece | FunnelPiece | FinishPiece;
+export type Piece = WallPiece | BoxPiece | PegPiece | SpinnerPiece | SliderPiece | HolePiece;
 
 export interface MapJson {
   id: string;
   name: string;
   units: 'm';
   marble: { radius: number; density: number; friction: number; restitution: number; rollingResistance: number };
-  /** 출발 게이트. on = 경사판 id, at = 막대 위치(오르막 끝에서의 거리). */
-  start: { on: string; at: number; slots: number; slotWidth: number; liftTime: number };
-  /** 조각은 구슬이 지나가는 순서대로 적는다. */
+  /** 판이 수평에서 기운 각. 클수록 빠르다. */
+  tiltDeg: number;
+  /** 판 안쪽 폭, 위 끝과 아래 끝의 y, 벽 높이 */
+  width: number;
+  top: number;
+  bottom: number;
+  wallH: number;
+  /** 출발 게이트(가로 막대)의 윗면 y. 구슬은 그 위에 한 줄에 slots개씩 선다. */
+  start: { y: number; slots: number; slotWidth: number; liftTime: number };
+  /** 결승선의 y. 그 아래부터 bottom까지가 받침 칸이다. */
+  finishY: number;
+  /** 구간이 시작하는 y들(진단 출력용) */
+  marks?: number[];
+  /** 결승 입구(아슬아슬한 순간을 잡는 곳). 구슬이 여기 가까우면 화면이 잠깐 느려진다. */
+  spot?: V2;
   pieces: Piece[];
-  /** 진행도 계산용 꺾은선. 생략하면 조각 순서에서 만든다. */
-  centerline?: V3[];
 }
 
 const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
-const vec = (v: unknown, n = 3) => Array.isArray(v) && v.length === n && v.every(num);
+const pos = (v: unknown) => num(v) && (v as number) > 0;
+const v2 = (v: unknown) => Array.isArray(v) && v.length === 2 && v.every(num);
 
 const FIELDS: Record<Piece['type'], [string, (v: unknown) => boolean][]> = {
-  ramp: [
-    ['id', (v) => typeof v === 'string'],
-    ['pos', vec],
-    ['yawDeg', num],
-    ['slopeDeg', num],
-    ['length', num],
-    ['width', num],
-    ['railH', num],
+  wall: [
+    ['a', v2],
+    ['b', v2],
   ],
-  drop: [
-    ['pos', vec],
-    ['yawDeg', num],
-    ['size', vec],
+  box: [
+    ['at', v2],
+    ['size', v2],
   ],
-  wedge: [
-    ['on', (v) => typeof v === 'string'],
-    ['at', (v) => vec(v, 2)],
-    ['size', vec],
+  peg: [
+    ['at', v2],
+    ['r', pos],
   ],
   spinner: [
-    ['on', (v) => typeof v === 'string'],
-    ['at', (v) => vec(v, 2)],
-    ['length', num],
+    ['at', v2],
+    ['length', pos],
     ['rpm', num],
   ],
-  pins: [
-    ['on', (v) => typeof v === 'string'],
-    ['at', (v) => vec(v, 2)],
-    ['layout', (v) => typeof v === 'string' && /^\d+(-\d+)*$/.test(v)],
-    ['spacing', num],
-    ['radius', num],
-    ['height', num],
-    ['massRatio', num],
-    ['despawnDrop', num],
+  hole: [
+    ['at', v2],
+    ['r', pos],
+    ['to', v2],
   ],
-  funnel: [
-    ['pos', vec],
-    ['rOuter', num],
-    ['rInner', num],
-    ['angleDeg', num],
-    ['segments', (v) => Number.isInteger(v) && (v as number) >= 8],
-    ['rimH', num],
-  ],
-  finish: [
-    ['pos', vec],
-    ['size', vec],
-    ['tray', vec],
+  slider: [
+    ['at', v2],
+    ['size', v2],
+    ['amp', num],
+    ['period', pos],
   ],
 };
 
@@ -169,22 +150,17 @@ export function validateMap(data: unknown): MapJson {
   if (m.units !== 'm') fail('units는 "m"이어야 함');
   for (const k of ['radius', 'density', 'friction', 'restitution', 'rollingResistance'] as const)
     if (!num(m.marble?.[k])) fail(`marble.${k}`);
-  for (const k of ['at', 'slots', 'slotWidth', 'liftTime'] as const) if (!num(m.start?.[k])) fail(`start.${k}`);
+  for (const k of ['tiltDeg', 'width', 'wallH'] as const) if (!pos(m[k])) fail(k);
+  for (const k of ['top', 'bottom', 'finishY'] as const) if (!num(m[k])) fail(k);
+  for (const k of ['y', 'slots', 'slotWidth', 'liftTime'] as const) if (!num(m.start?.[k])) fail(`start.${k}`);
+  if (!(m.top > m.start.y && m.start.y > m.finishY && m.finishY > m.bottom)) fail('top > start.y > finishY > bottom 이어야 함');
+  if (m.wallH <= m.marble.radius * 2) fail('wallH는 구슬 지름보다 커야 함');
   if (!Array.isArray(m.pieces)) fail('pieces');
-  const ramps = new Set<string>();
   m.pieces.forEach((p, i) => {
     const fields = FIELDS[p?.type];
     if (!fields) fail(`pieces[${i}].type = ${p?.type}`);
     for (const [key, ok] of fields)
       if (!ok((p as unknown as Record<string, unknown>)[key])) fail(`pieces[${i}] (${p.type}).${key}`);
-    if (p.type === 'ramp') ramps.add(p.id);
-    if (p.type === 'wedge' && p.slide && !(num(p.slide.amp) && num(p.slide.period) && p.slide.period > 0)) fail(`pieces[${i}] (wedge).slide`);
-    if ((p.type === 'wedge' || p.type === 'pins' || p.type === 'spinner') && !ramps.has(p.on))
-      fail(`pieces[${i}] (${p.type}).on = "${p.on}" 인 경사판이 앞에 없음`);
   });
-  if (!ramps.has(m.start.on)) fail(`start.on = "${m.start.on}"`);
-  if (!m.pieces.some((p) => p.type === 'finish')) fail('finish 조각이 없음');
-  if (m.centerline && !(Array.isArray(m.centerline) && m.centerline.length >= 2 && m.centerline.every((p) => vec(p))))
-    fail('centerline');
   return m;
 }

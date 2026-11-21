@@ -1,15 +1,14 @@
 // three.js 장면. race의 상태를 읽기만 한다.
-// 드로콜: 나무 1 + 소용돌이 1 + 쐐기 1 + 구슬 1 + 핀 1 + 그림자 1 + 게이트 1 + 움직이는 장애물마다 1 = 11 (목표 20 이하)
+// 드로콜: 판 1 + 나무 벽 1 + 색 블록 1 + 핀 1 + 결승선 1 + 구슬 1 + 그림자 1 + 게이트 1 + 움직이는 장애물마다 1
 import {
   BoxGeometry,
   BufferAttribute,
-  BufferGeometry,
+  type BufferGeometry,
   CanvasTexture,
   CircleGeometry,
   Color,
   CylinderGeometry,
   DirectionalLight,
-  DoubleSide,
   HemisphereLight,
   InstancedMesh,
   Matrix4,
@@ -17,7 +16,10 @@ import {
   MeshBasicMaterial,
   MeshPhysicalMaterial,
   MeshStandardMaterial,
+  NearestFilter,
   PerspectiveCamera,
+  PlaneGeometry,
+  RingGeometry,
   Quaternion,
   RepeatWrapping,
   Scene as ThreeScene,
@@ -33,13 +35,14 @@ import { QUALITY, type QualityName } from '../config';
 import type { BuiltMap } from '../map/build';
 import type { Race } from '../race/race';
 
-const WEDGE_COLORS: Record<string, number> = {
+const COLORS: Record<string, number> = {
   red: 0xe5484d,
   orange: 0xf08c3a,
   yellow: 0xf2c94c,
   green: 0x4caf6e,
   blue: 0x3f8fe0,
   purple: 0x9b6bdf,
+  peg: 0xdfe4ec,
 };
 
 function canvasTexture(w: number, h: number, draw: (c: CanvasRenderingContext2D) => void) {
@@ -82,46 +85,6 @@ const marbleTexture = () =>
     for (let i = 0; i < 4; i++) c.fillRect(i * 32 + 10, 29, 12, 6);
   });
 
-// 소용돌이 무늬: 번갈아 칠한 동심원 띠 + 나선 세 줄 + 배출구 둘레의 붉은 고리
-const funnelTexture = () =>
-  canvasTexture(512, 512, (c) => {
-    const bands = 9;
-    for (let i = 0; i < bands; i++) {
-      c.fillStyle = i % 2 ? '#b98448' : '#e0b074';
-      c.beginPath();
-      c.arc(256, 256, 256 * (1 - i / bands) + 1, 0, 2 * Math.PI);
-      c.fill();
-    }
-    c.lineCap = 'round';
-    for (let arm = 0; arm < 3; arm++) {
-      c.strokeStyle = 'rgba(70, 38, 14, 0.75)';
-      c.lineWidth = 7;
-      c.beginPath();
-      for (let t = 0.08; t <= 1; t += 0.01) {
-        const a = (arm * 2 * Math.PI) / 3 + t * 2.2 * Math.PI;
-        c.lineTo(256 + Math.cos(a) * t * 250, 256 + Math.sin(a) * t * 250);
-      }
-      c.stroke();
-    }
-    c.strokeStyle = '#d2362b';
-    c.lineWidth = 9;
-    c.beginPath();
-    c.arc(256, 256, 34, 0, 2 * Math.PI);
-    c.stroke();
-  });
-
-/** 점 6개(아래 삼각형 0-2, 위 삼각형 3-5) → 윗면 + 옆면 3개. 면마다 법선이 따로라 인덱스 없이 만든다. */
-function prismGeometry(points: number[], color: string) {
-  const p = (i: number) => points.slice(i * 3, i * 3 + 3);
-  const tris = [3, 4, 5, 0, 1, 4, 0, 4, 3, 1, 2, 5, 1, 5, 4, 2, 0, 3, 2, 3, 5].flatMap(p);
-  const g = new BufferGeometry();
-  g.setAttribute('position', new BufferAttribute(new Float32Array(tris), 3));
-  g.computeVertexNormals();
-  const rgb = new Color(WEDGE_COLORS[color] ?? color).toArray();
-  g.setAttribute('color', new BufferAttribute(new Float32Array(tris.length).map((_, i) => rgb[i % 3]), 3));
-  return g;
-}
-
 const blobTexture = () =>
   canvasTexture(64, 64, (c) => {
     const g = c.createRadialGradient(32, 32, 2, 32, 32, 32);
@@ -130,6 +93,27 @@ const blobTexture = () =>
     c.fillStyle = g;
     c.fillRect(0, 0, 64, 64);
   });
+
+function checkerTexture() {
+  const t = canvasTexture(2, 2, (c) => {
+    c.fillStyle = '#fff';
+    c.fillRect(0, 0, 2, 2);
+    c.fillStyle = '#111';
+    c.fillRect(0, 0, 1, 1);
+    c.fillRect(1, 1, 1, 1);
+  });
+  t.magFilter = NearestFilter;
+  t.wrapS = t.wrapT = RepeatWrapping;
+  return t;
+}
+
+/** 합칠 도형에 꼭짓점 색을 입힌다. */
+function paint<T extends BufferGeometry>(g: T, color: string | undefined, fallback: string) {
+  const rgb = new Color(COLORS[color ?? fallback] ?? color).toArray();
+  const n = g.getAttribute('position').count * 3;
+  g.setAttribute('color', new BufferAttribute(new Float32Array(n).map((_, i) => rgb[i % 3]), 3));
+  return g;
+}
 
 export class Scene {
   readonly renderer: WebGLRenderer;
@@ -140,24 +124,34 @@ export class Scene {
   private statics: Object3D[] = [];
   private dynamics: Object3D[] = [];
   private marbles?: InstancedMesh;
-  private pins?: InstancedMesh;
   private blobs?: InstancedMesh;
   private gate?: Mesh;
+  private trap: Mesh[] = [];
+  /** 뭉침 폭발 효과: 퍼지며 사라지는 고리 */
+  private flash = new Mesh(new RingGeometry(0.7, 1, 32), new MeshBasicMaterial({ color: 0xfff1a8, transparent: true, depthWrite: false }));
+  private flashAt = -Infinity;
   private movers: Mesh[] = [];
   private quality = QUALITY.normal;
-  /** 이번 프레임에 그린(보간된) 구슬 위치. 이름표와 카메라가 읽는다. */
+  /** 이번 프레임에 그린(보간된) 구슬 위치. 이름표가 읽는다. */
   renderPos = new Float32Array(0);
 
   constructor(readonly canvas: HTMLCanvasElement) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setClearColor(0x20242c);
     this.scene.add(new HemisphereLight(0xdfe9ff, 0x4a3a2a, 1.4));
-    this.sun.position.set(6, 14, 9);
     this.sun.shadow.mapSize.set(1024, 1024);
     // 그림자 영역은 카메라가 보는 곳 주변만 덮는다
     Object.assign(this.sun.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 1, far: 40 });
     this.sun.shadow.bias = -0.002;
     this.scene.add(this.sun, this.sun.target);
+    this.flash.visible = false;
+    this.scene.add(this.flash);
+  }
+
+  /** (x, y)에서 터지는 효과를 시작한다. */
+  burst(x: number, y: number) {
+    this.flash.position.set(x, y, 0.3);
+    this.flashAt = performance.now(); // 화면 효과용. 경주 시간과 무관
   }
 
   setQuality(name: QualityName) {
@@ -202,8 +196,10 @@ export class Scene {
   /** 코스의 고정 메시를 만든다. */
   setMap(map: BuiltMap) {
     this.clear(this.statics);
-    const boxes: BufferGeometry[] = [];
-    const prisms: BufferGeometry[] = [];
+    const walls: BufferGeometry[] = [];
+    const blocks: BufferGeometry[] = [];
+    const pegs: BufferGeometry[] = [];
+    const trapBlocks: BufferGeometry[] = [];
     const q = new Quaternion();
     const add = (mesh: Mesh) => {
       mesh.receiveShadow = true;
@@ -211,46 +207,54 @@ export class Scene {
       this.statics.push(mesh);
     };
     for (const v of map.visuals) {
-      if (v.kind === 'box') {
-        const g = new BoxGeometry(v.half[0] * 2, v.half[1] * 2, v.half[2] * 2);
-        g.applyQuaternion(q.fromArray(v.rot));
-        g.translate(v.pos[0], v.pos[1], v.pos[2]);
-        boxes.push(g);
-      } else if (v.kind === 'prism') {
-        prisms.push(prismGeometry(v.points, v.color));
-      } else {
-        const g = new BufferGeometry();
-        g.setAttribute('position', new BufferAttribute(new Float32Array(v.vertices), 3));
-        g.setIndex(v.indices);
-        g.computeVertexNormals();
-        // 위에서 내려다보면 원뿔이 평평한 원으로 보이므로, 낮은 곳일수록 어둡게 칠해 깊이를 보인다
-        let lo = Infinity;
-        let hi = -Infinity;
-        for (let i = 1; i < v.vertices.length; i += 3) {
-          lo = Math.min(lo, v.vertices[i]);
-          hi = Math.max(hi, v.vertices[i]);
-        }
-        const shade = new Float32Array(v.vertices.length);
-        for (let i = 0; i < shade.length; i += 3) shade.fill(0.35 + (0.65 * (v.vertices[i + 1] - lo)) / (hi - lo), i, i + 3);
-        g.setAttribute('color', new BufferAttribute(shade, 3));
-        // 위에서 본 평면 투영으로 무늬를 입힌다(이음매가 없다). 구슬이 도는 게 무늬를 기준으로 보인다.
-        const f = map.funnel!;
-        const uv = new Float32Array((v.vertices.length / 3) * 2);
-        for (let i = 0, k = 0; i < v.vertices.length; i += 3, k += 2) {
-          uv[k] = (v.vertices[i] - f.center[0]) / (2 * f.rOuter) + 0.5;
-          uv[k + 1] = (v.vertices[i + 2] - f.center[2]) / (2 * f.rOuter) + 0.5;
-        }
-        g.setAttribute('uv', new BufferAttribute(uv, 2));
-        add(new Mesh(g, new MeshStandardMaterial({ map: funnelTexture(), roughness: 0.7, side: DoubleSide, vertexColors: true })));
+      if (v.kind === 'hole') continue;
+      if (v.kind === 'peg') {
+        const g = new CylinderGeometry(v.radius, v.radius, v.height, v.radius > 0.05 ? 24 : 10).rotateX(Math.PI / 2).translate(v.pos[0], v.pos[1], v.pos[2]);
+        // 벽의 둥근 끝은 벽과 같은 나무
+        if (v.color === 'wood') (v.trap ? trapBlocks : walls).push(g);
+        else pegs.push(paint(g, v.color, 'peg'));
+        continue;
       }
+      const g = new BoxGeometry(v.half[0] * 2, v.half[1] * 2, v.half[2] * 2);
+      g.applyQuaternion(q.fromArray(v.rot));
+      g.translate(v.pos[0], v.pos[1], v.pos[2]);
+      if (v.color === 'plate') {
+        // 판은 벽보다 어둡게 칠해 구슬과 장애물이 도드라지게 한다. 나무결은 판 길이만큼 되풀이한다.
+        const tex = woodTexture();
+        tex.repeat.set(1, v.half[1] / v.half[0]);
+        add(new Mesh(g, new MeshStandardMaterial({ map: tex, color: 0x6f6a78, roughness: 0.9 })));
+      } else if (v.trap) trapBlocks.push(g);
+      else if (v.color) blocks.push(paint(g, v.color, 'red'));
+      else walls.push(g);
     }
-    if (boxes.length) add(new Mesh(mergeGeometries(boxes), this.wood));
-    if (prisms.length)
-      add(new Mesh(mergeGeometries(prisms), new MeshStandardMaterial({ vertexColors: true, roughness: 0.6, side: DoubleSide })));
-    for (const g of [...boxes, ...prisms]) g.dispose();
+    if (walls.length) add(new Mesh(mergeGeometries(walls), this.wood));
+    if (blocks.length) add(new Mesh(mergeGeometries(blocks), new MeshStandardMaterial({ vertexColors: true, roughness: 0.6 })));
+    if (pegs.length) add(new Mesh(mergeGeometries(pegs), new MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.3 })));
+    // 안전망이 걸리면 사라지는 결승 깔때기 벽은 따로 둔다
+    this.trap = trapBlocks.length ? [new Mesh(mergeGeometries(trapBlocks), this.wood)] : [];
+    // 다른 벽과 윗면이 겹치는 곳이 깜빡이지 않게 아주 조금 높인다
+    for (const m of this.trap) m.scale.z = 1.01;
+    this.trap.forEach(add);
+    for (const g of [...walls, ...blocks, ...pegs, ...trapBlocks]) g.dispose();
+
+    // 구멍 함정: 검은 구멍 + 붉은 테두리
+    const holes = map.visuals.filter((v) => v.kind === 'hole');
+    if (holes.length) {
+      const dark = mergeGeometries(holes.map((v) => new CircleGeometry(v.radius, 24).translate(v.pos[0], v.pos[1], 0.006)));
+      const rim = mergeGeometries(holes.map((v) => new RingGeometry(v.radius, v.radius * 1.25, 24).translate(v.pos[0], v.pos[1], 0.007)));
+      add(new Mesh(dark, new MeshBasicMaterial({ color: 0x050505 })));
+      add(new Mesh(rim, new MeshBasicMaterial({ color: 0xe5484d })));
+    }
+
+    // 결승선
+    const checker = checkerTexture();
+    checker.repeat.set(map.halfWidth / 0.2, 1);
+    const line = new Mesh(new PlaneGeometry(map.halfWidth * 2, 0.4), new MeshBasicMaterial({ map: checker }));
+    line.position.set(0, map.finishY, 0.01);
+    add(line);
   }
 
-  /** 경주 하나의 움직이는 메시(구슬, 핀, 그림자, 게이트)를 만든다. */
+  /** 경주 하나의 움직이는 메시(구슬, 그림자, 게이트, 움직이는 장애물)를 만든다. */
   setRace(race: Race, colors: string[]) {
     this.clear(this.dynamics);
     const { map, n } = race;
@@ -271,41 +275,31 @@ export class Scene {
     const c = new Color();
     colors.forEach((css, i) => this.marbles!.setColorAt(i, c.set(css)));
 
-    if (map.pins.length) {
-      const p = map.pins[0];
-      const body = new CylinderGeometry(p.radius * 0.8, p.radius, p.height, 10).translate(0, p.height / 2, 0);
-      const head = new SphereGeometry(p.headRadius, 10, 8).translate(0, p.height + p.headRadius * 0.4, 0);
-      this.pins = add(
-        new InstancedMesh(mergeGeometries([body, head]), new MeshStandardMaterial({ color: 0xf4f1ea, roughness: 0.4 }), map.pins.length),
-      );
-      this.pins.castShadow = true;
-      this.pins.frustumCulled = false;
-    } else this.pins = undefined;
-
     if (!this.quality.shadowMap) {
       const blob = new MeshBasicMaterial({ map: blobTexture(), transparent: true, depthWrite: false });
-      // 경사면에 반쯤 묻히지 않게 카메라 쪽으로 당긴다
-      Object.assign(blob, { polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
-      this.blobs = add(new InstancedMesh(new CircleGeometry(r * 1.5, 16).rotateX(-Math.PI / 2), blob, n));
+      this.blobs = add(new InstancedMesh(new CircleGeometry(r * 1.5, 16), blob, n));
       this.blobs.frustumCulled = false;
     } else this.blobs = undefined;
 
-    this.movers = map.movers.map(({ visual }) => {
-      let mesh: Mesh;
-      if (visual.kind === 'prism') {
-        mesh = new Mesh(prismGeometry(visual.points, visual.color), new MeshStandardMaterial({ vertexColors: true, roughness: 0.6, side: DoubleSide }));
-      } else {
-        const [ox, oy, oz] = visual.offset;
-        const parts = visual.halves.map((h) => new BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2).translate(ox, oy, oz));
-        mesh = new Mesh(mergeGeometries(parts), new MeshStandardMaterial({ color: WEDGE_COLORS[visual.color] ?? visual.color, roughness: 0.5 }));
-      }
+    const q = new Quaternion();
+    this.movers = map.movers.map(({ halves, parts, color, shift, tips }) => {
+      const geometry = mergeGeometries(
+        parts
+          ? parts.map(({ half: h, pos, rot }) => new BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2).applyQuaternion(q.fromArray(rot)).translate(pos[0], pos[1], pos[2]))
+          : halves.map((h) => new BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2).translate(shift, 0, 0)),
+      );
+      const mesh = new Mesh(geometry, new MeshStandardMaterial({ color: COLORS[color] ?? color, roughness: 0.5 }));
       mesh.castShadow = true;
+      if (tips) {
+        const h = tips.half;
+        const red = mergeGeometries(tips.at.map((x) => new BoxGeometry(h[0] * 2, h[1] * 2, h[2] * 2).translate(x, 0, 0)));
+        mesh.add(new Mesh(red, new MeshStandardMaterial({ color: COLORS.red, roughness: 0.4 })));
+      }
       return add(mesh);
     });
 
     const g = map.gate;
     this.gate = add(new Mesh(new BoxGeometry(g.half[0] * 2, g.half[1] * 2, g.half[2] * 2), new MeshStandardMaterial({ color: 0x2f3742 })));
-    this.gate.quaternion.fromArray(g.rot);
   }
 
   private m = new Matrix4();
@@ -313,7 +307,6 @@ export class Scene {
   private q1 = new Quaternion();
   private v = new Vector3();
   private one = new Vector3(1, 1, 1);
-  private zero = new Vector3(0, 0, 0);
 
   /** alpha = 직전 스텝과 현재 스텝 사이의 보간 비율 */
   render(race: Race, alpha: number, target: Vector3) {
@@ -326,23 +319,12 @@ export class Scene {
       v.toArray(this.renderPos, k);
       q0.fromArray(race.prevRot, i * 4).slerp(q1.fromArray(race.rot, i * 4), alpha);
       this.marbles!.setMatrixAt(i, m.compose(v, q0, this.one));
-      if (this.blobs) {
-        v.y -= r - 0.01;
-        this.blobs.setMatrixAt(i, m.makeTranslation(v.x, v.y, v.z));
-      }
+      // 그림자는 판 위에, 빛 반대쪽으로 조금 밀어 놓는다
+      if (this.blobs) this.blobs.setMatrixAt(i, m.makeTranslation(v.x - r * 0.3, v.y - r * 0.4, 0.012));
     }
     this.marbles!.instanceMatrix.needsUpdate = true;
     if (this.blobs) this.blobs.instanceMatrix.needsUpdate = true;
 
-    if (this.pins) {
-      for (let i = 0; i < race.pinAlive.length; i++) {
-        const k = i * 3;
-        v.set(lerp(race.prevPinPos, race.pinPos, k), lerp(race.prevPinPos, race.pinPos, k + 1), lerp(race.prevPinPos, race.pinPos, k + 2));
-        q0.fromArray(race.prevPinRot, i * 4).slerp(q1.fromArray(race.pinRot, i * 4), alpha);
-        this.pins.setMatrixAt(i, m.compose(v, q0, race.pinAlive[i] ? this.one : this.zero));
-      }
-      this.pins.instanceMatrix.needsUpdate = true;
-    }
     this.movers.forEach((mesh, i) => {
       const k = i * 3;
       mesh.position.set(lerp(race.prevMoverPos, race.moverPos, k), lerp(race.prevMoverPos, race.moverPos, k + 1), lerp(race.prevMoverPos, race.moverPos, k + 2));
@@ -350,10 +332,15 @@ export class Scene {
     });
     this.gate!.position.set(lerp(race.prevGatePos, race.gatePos, 0), lerp(race.prevGatePos, race.gatePos, 1), lerp(race.prevGatePos, race.gatePos, 2));
 
-    if (this.quality.shadowMap) {
-      this.sun.target.position.copy(target);
-      this.sun.position.copy(target).add(v.set(3, 12, 5));
+    const k = (performance.now() - this.flashAt) / 450;
+    this.flash.visible = k < 1;
+    if (k < 1) {
+      this.flash.scale.setScalar(0.3 + k * 1.6);
+      (this.flash.material as MeshBasicMaterial).opacity = 1 - k;
     }
+    // 빛은 보는 곳을 따라다닌다(판이 길어서 한자리에 두면 그림자 영역을 벗어난다)
+    this.sun.target.position.copy(target);
+    this.sun.position.copy(target).add(v.set(3, 5, 12));
     this.renderer.render(this.scene, this.camera);
   }
 

@@ -1,9 +1,8 @@
-// 추격 카메라.
-// - 출발 전: 게이트를 보는 고정 시점(시드와 무관해서 셔플해도 바뀌지 않는다)
-// - 경사 구간: 선두 뒤쪽 낮은 곳에서 따라가고, 단이 꺾이면 반대편으로 돌아 들어간다. 빠를수록 화각이 넓어진다
-// - 소용돌이: 둘레를 돌면서 선두가 배출구에 가까워질수록 내려가며 다가간다
+// 추격 카메라. 판 아래쪽에서 위를 올려다보며 선두를 따라 내려간다(구슬이 화면 쪽으로 달려온다).
+// - 출발 전·섞는 동안: 출발 칸을 보는 고정 시점(시드와 무관해서 셔플해도 바뀌지 않는다)
+// - 달리는 동안: 선두와 2등을 함께 담고, 빠를수록 화각이 넓어지고, 선두가 좌우로 움직이면 따라 돈다
+// - 결승 직전: 바짝 다가가 낮게 깔린다. climax가 켜지면 게임이 잠깐 느리게 돌린다
 import { Vector3, type PerspectiveCamera } from 'three';
-import { projectToCenterline } from '../map/build';
 import type { Race } from '../race/race';
 
 const BASE_FOV = 42;
@@ -11,16 +10,17 @@ const smooth = (k: number, dt: number) => 1 - Math.exp(-k * dt);
 
 export class FollowCamera {
   readonly target = new Vector3();
-  /** 선두가 배출구 바로 앞에 있고 아직 아무도 들어오지 않았다 → 게임이 잠깐 느리게 돌린다 */
+  /** 선두가 결승선 바로 앞에 있고 아직 아무도 들어오지 않았다 */
   climax = false;
+  /** 게임이 넣는다: 구슬이 결승 입구 앞에 있으면 그 입구. 카메라가 바짝 다가간다 */
+  zoom: [number, number] | null = null;
   private wantTarget = new Vector3();
-  private wantPosition = new Vector3();
-  private lead = new Vector3();
-  private lastLead = new Vector3();
+  private lastY = 0;
   private first = true;
-  private side = 1; // 진행 방향(x)의 부호를 평활한 값
   private speed = 0;
-  private orbit = 0.6;
+  private dist = 10;
+  private tilt = 0.3;
+  private sway = 0;
 
   constructor(private camera: PerspectiveCamera) {}
 
@@ -33,51 +33,59 @@ export class FollowCamera {
   update(race: Race, positions: Float32Array, dt: number) {
     const { map } = race;
     const cam = this.camera;
-    const back = cam.aspect < 1 ? 1.45 : 1; // 세로 화면에서는 좌우가 좁으므로 더 물러난다
+    const W = map.halfWidth * 2;
+    /** 폭 w가 화면에 꽉 차는 거리 */
+    const fit = (w: number) => w / (2 * Math.tan((BASE_FOV * Math.PI) / 360) * Math.min(1, cam.aspect));
+    let dist = fit(W * 1.3);
+    let tilt = 0.3;
+    let sway = 0;
     let fov = BASE_FOV;
-    let kPos = 5;
     this.climax = false;
 
-    if (!race.started) {
-      this.wantTarget.fromArray(map.gate.pos);
-      this.wantPosition.set(this.wantTarget.x - 1.4, this.wantTarget.y + 1.7 * back, this.wantTarget.z + 3.6 * back);
-      this.side = 1;
+    if (!race.released) {
+      this.wantTarget.set(0, map.startY + 0.5, 0);
     } else {
-      // 아직 달리는 구슬 중 선두. 모두 들어왔으면 마지막 구슬.
+      // 아직 달리는 구슬 중 선두와 2등. 모두 들어왔으면 마지막 구슬.
       const order = race.ranking();
-      const leader = order.find((i) => Number.isNaN(race.finishTime[i])) ?? order[order.length - 1];
-      this.lead.fromArray(positions, leader * 3);
-      if (dt > 0) this.speed += (this.lead.distanceTo(this.lastLead) / dt - this.speed) * smooth(3, dt);
-      this.lastLead.copy(this.lead);
-      const funnel = map.funnel;
-
-      if (funnel && race.progress[leader] >= funnel.s - 0.2) {
-        const rho = Math.hypot(this.lead.x - funnel.center[0], this.lead.z - funnel.center[2]) / funnel.rOuter;
-        const near = Math.min(1, Math.max(0.2, rho)); // 1 = 테두리, 0.2 = 배출구 앞
-        this.climax = rho < 0.3 && race.finishOrder.length === 0;
-        this.orbit += dt * (0.45 + (1 - near) * 0.5);
-        const fit = (funnel.rOuter * 1.25) / (Math.tan((BASE_FOV * Math.PI) / 360) * Math.min(1, cam.aspect));
-        const d = fit * (0.5 + 0.5 * near);
-        this.wantTarget.set(funnel.center[0], funnel.center[1] - funnel.rOuter * (0.45 - 0.25 * near), funnel.center[2]);
-        this.wantPosition.set(funnel.center[0] + Math.cos(this.orbit) * d * 0.55, funnel.center[1] + d * 0.8, funnel.center[2] + Math.sin(this.orbit) * d * 0.55);
-        kPos = 3;
-      } else {
-        const p = projectToCenterline(map, this.lead.x, this.lead.y, this.lead.z);
-        this.side += (Math.sign(p.tangent[0]) - this.side) * smooth(2.2, dt);
-        // 선두보다 조금 앞을 본다
-        this.wantTarget.set(this.lead.x + p.tangent[0] * 0.9, this.lead.y + p.tangent[1] * 0.9, this.lead.z + p.tangent[2] * 0.9);
-        const pull = 1 + Math.min(0.3, this.speed / 40);
-        this.wantPosition.set(this.lead.x - this.side * 2.5 * back * pull, this.lead.y + 1.15 * back * pull, this.lead.z + 2.7 * back * pull);
-        fov = BASE_FOV + Math.min(16, this.speed * 0.9);
+      const running = order.filter((i) => Number.isNaN(race.finishTime[i]));
+      const leader = running[0] ?? order[order.length - 1];
+      const x = positions[leader * 3];
+      const y = positions[leader * 3 + 1];
+      const gap = running.length > 1 ? Math.min(W, positions[running[1] * 3 + 1] - y) : 0;
+      if (dt > 0) this.speed += (Math.abs(y - this.lastY) / dt - this.speed) * smooth(3, dt);
+      this.lastY = y;
+      const toGo = y - map.finishY;
+      // 결승 구덩이: 판 폭 전체가 보이게 다가가 낮게 깔리고, 1등이 나올 때까지 느리게 돈다
+      // 1등이 나온 뒤에도 남은 구슬이 들어오는 동안 같은 시점을 유지한다. 느리게 도는 것은 1등이 나올 때까지만.
+      const finale = toGo < W * 1.4;
+      this.climax = finale && race.finishOrder.length === 0;
+      dist = fit(finale ? W * 1.02 : W * 0.85 + gap * 0.6);
+      tilt = finale ? 0.62 : 0.5;
+      sway = finale ? 0 : x * 0.6;
+      // 선두보다 조금 아래(앞)를 본다
+      // 결승 직전에는 선두와 결승선 사이를 본다
+      this.wantTarget.set(finale ? 0 : x * 0.5, finale ? y - Math.min(toGo * 0.5, W * 0.3) : y + gap * 0.35 - W * 0.2, 0);
+      fov = BASE_FOV + Math.min(14, this.speed * 0.5);
+      if (this.zoom) {
+        // 들어갈 것 같은 순간: 입구를 화면 가운데에 두고 판 폭의 40%만 보이게 다가간다
+        this.wantTarget.set(this.zoom[0], this.zoom[1] + W * 0.08, 0);
+        dist = fit(W * 0.4);
+        tilt = 0.55;
+        sway = 0;
+        fov = BASE_FOV;
       }
     }
 
-    const snap = this.first;
+    const k = this.first ? 1 : smooth(2.5, dt);
+    this.dist += (dist - this.dist) * k;
+    this.tilt += (tilt - this.tilt) * k;
+    this.sway += (sway - this.sway) * k;
+    this.target.lerp(this.wantTarget, this.first ? 1 : smooth(6, dt));
     this.first = false;
-    this.target.lerp(this.wantTarget, snap ? 1 : smooth(8, dt));
-    cam.position.lerp(this.wantPosition, snap ? 1 : smooth(kPos, dt));
-    cam.fov += (fov - cam.fov) * (snap ? 1 : smooth(3, dt));
+    cam.position.set(this.target.x + this.sway, this.target.y - Math.sin(this.tilt) * this.dist, Math.cos(this.tilt) * this.dist);
+    cam.fov += (fov - cam.fov) * k;
     cam.updateProjectionMatrix();
+    cam.up.set(0, 1, 0);
     cam.lookAt(this.target);
   }
 }

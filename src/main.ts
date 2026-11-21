@@ -1,17 +1,14 @@
 // 진입점. 이름 입력 화면을 먼저 띄우고, 그동안 three.js와 Rapier(wasm)를 받는다.
 import './ui/style.css';
-import { STEPS_PER_SEC, type QualityName } from './config';
+import { STEPS_PER_SEC } from './config';
 import type { Game } from './game';
 import type { Race } from './race/race';
 import { parseSeed, seedToHex } from './rng';
-import { marbleColor, parseNames } from './ui/names';
+import { entryColors, parseNames } from './ui/names';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const names = $<HTMLTextAreaElement>('names');
 const winnersInput = $<HTMLInputElement>('winners');
-const mapSelect = $<HTMLSelectElement>('map');
-const qualitySelect = $<HTMLSelectElement>('quality');
-const skillsBox = $<HTMLInputElement>('skills');
 const startButton = $<HTMLButtonElement>('start');
 const panel = $<HTMLFormElement>('panel');
 const rank = $('rank');
@@ -28,26 +25,23 @@ let seed = parseSeed(url.get('seed')) ?? randomSeed();
 names.value = url.get('names') ?? '수박, 키위, 참외, 포도, 자두';
 if (url.get('win') === 'last') panel.querySelector<HTMLInputElement>('input[value=last]')!.checked = true;
 winnersInput.value = String(Math.max(1, +(url.get('n') ?? 1) || 1));
-skillsBox.checked = url.get('skills') === '1';
-if (url.get('q') === 'low' || url.get('q') === 'high') qualitySelect.value = url.get('q')!;
-let mapId = url.get('map') ?? 'wood-v1';
+const mapId = 'wood-v1';
 
 function syncUrl() {
-  const p = new URLSearchParams({ seed: seedToHex(seed), names: names.value, win: winRadio().value, n: winnersInput.value, map: mapId });
-  if (skillsBox.checked) p.set('skills', '1');
-  if (qualitySelect.value !== 'normal') p.set('q', qualitySelect.value);
+  const p = new URLSearchParams({ seed: seedToHex(seed), names: names.value, win: winRadio().value, n: winnersInput.value });
   history.replaceState(null, '', `?${p}`);
   $('seed').textContent = seedToHex(seed);
 }
 
 // ---- 게임 ----
 let game: Game | undefined;
-let mapJson: unknown;
 let entries = parseNames(names.value);
+let colors = entryColors(entries);
 let announced = false;
 
 function prepare() {
   entries = parseNames(names.value);
+  colors = entryColors(entries);
   $('count').textContent = `구슬 ${entries.length}개 (최대 30개)`;
   syncUrl();
   const ok = entries.length >= 2;
@@ -57,16 +51,14 @@ function prepare() {
   if (!ok) return;
   announced = false;
   banner.hidden = true;
-  game.prepare(entries, seed, skillsBox.checked, entries.map((_, i) => marbleColor(i)));
+  game.prepare(entries, seed, false, colors);
   drawRank(game.race!);
 }
 
 async function loadMap(id: string) {
   const res = await fetch(`maps/${encodeURIComponent(id)}.json`);
   if (!res.ok) throw new Error(`맵 "${id}"을(를) 찾을 수 없습니다.`);
-  mapJson = await res.json();
-  game!.loadMap(mapJson);
-  mapId = id;
+  game!.loadMap(await res.json());
 }
 
 /** 입력 패널이 덮은 영역을 피해 장면 중심을 옮긴다. */
@@ -89,7 +81,7 @@ function drawRank(race: Race) {
     const li = (rank.children[k] ?? rank.appendChild(document.createElement('li'))) as HTMLElement;
     const t = race.finishTime[m];
     li.className = winners?.includes(m) ? 'win' : '';
-    li.innerHTML = `<b>${k + 1}</b><i style="background:${marbleColor(m)}"></i><span></span><time>${Number.isNaN(t) ? '' : (t / STEPS_PER_SEC).toFixed(2) + '초'}</time>`;
+    li.innerHTML = `<b>${k + 1}</b><i style="background:${colors[m]}"></i><span></span><time>${Number.isNaN(t) ? '' : (t / STEPS_PER_SEC).toFixed(2) + '초'}</time>`;
     li.querySelector('span')!.textContent = entries[m].name; // 이름은 사용자 입력이므로 textContent로만 넣는다
   });
   if (winners && !announced) {
@@ -101,19 +93,18 @@ function drawRank(race: Race) {
     $('again').hidden = false;
     $('pause').hidden = true;
   }
+  showSpeed();
 }
 
 async function boot() {
   syncUrl();
   $('count').textContent = `구슬 ${entries.length}개 (최대 30개)`;
   try {
-    const [{ Game }, maps] = await Promise.all([import('./game'), fetch('maps/index.json').then((r) => r.json())]);
-    for (const m of maps as { id: string; name: string }[]) mapSelect.add(new Option(m.name, m.id));
-    game = new Game($<HTMLCanvasElement>('view'), $('labels'));
+    const { Game } = await import('./game');
+    game = new Game($<HTMLCanvasElement>('view'), $('labels'), $<HTMLCanvasElement>('minimap'));
     if (import.meta.env.DEV) Object.assign(window, { game }); // 개발 중 콘솔에서 들여다보기 위한 것
-    game.setQuality(qualitySelect.value as QualityName);
-    await loadMap(mapId).catch(() => loadMap('wood-v1'));
-    mapSelect.value = mapId;
+    game.setQuality('normal');
+    await loadMap(mapId);
     let lastDraw = 0;
     game.onFrame = (race) => {
       const now = performance.now(); // 화면 갱신 주기용. 경주 시간은 스텝 번호로 센다.
@@ -139,19 +130,6 @@ names.addEventListener('input', () => {
   debounce = window.setTimeout(prepare, 250);
 });
 for (const el of [winnersInput, ...panel.querySelectorAll<HTMLInputElement>('input[name=win]')]) el.addEventListener('change', syncUrl);
-skillsBox.addEventListener('change', prepare);
-qualitySelect.addEventListener('change', () => {
-  game?.setQuality(qualitySelect.value as QualityName);
-  prepare();
-});
-mapSelect.addEventListener('change', async () => {
-  try {
-    await loadMap(mapSelect.value);
-    prepare();
-  } catch (e) {
-    message.textContent = (e as Error).message;
-  }
-});
 $('shuffle').addEventListener('click', () => {
   seed = randomSeed();
   prepare();
@@ -171,6 +149,7 @@ panel.addEventListener('submit', (e) => {
 $('again').addEventListener('click', () => {
   seed = randomSeed();
   panel.hidden = false;
+  showSpeed();
   $('hud').hidden = true;
   rank.replaceChildren();
   prepare();
@@ -198,7 +177,14 @@ try {
 }
 const applySpeed = () => {
   if (game) game.speed = +speedSelect.value;
+  showSpeed();
 };
+/** 경주 중이면 2배속 표시와 '누르면 2배속' 안내를 보여 준다 */
+function showSpeed() {
+  const running = panel.hidden && !!game?.race?.started && !game.race.done;
+  $('fast').hidden = !(running && speedSelect.value === '2');
+  $('tap-hint').hidden = !running || speedSelect.value === '2';
+}
 speedSelect.addEventListener('change', () => {
   applySpeed();
   try {
@@ -216,19 +202,25 @@ pauseButton.addEventListener('click', () => setPaused(!game?.paused));
 // 종료: 경주를 그만두고 같은 시드로 출발선에 다시 세운다
 $('stop').addEventListener('click', () => {
   panel.hidden = false;
+  showSpeed();
   $('hud').hidden = true;
   rank.replaceChildren();
   prepare();
   layout();
 });
 
-// 맵 편집은 누를 때 불러온다
-$('edit').addEventListener('click', async () =>
-  (await import('./ui/editor')).openEditor(mapJson, (json) => {
-    game!.loadMap(json); // 형식이 틀리면 던진다 → 편집기가 오류를 보여 준다
-    mapJson = json;
-    prepare();
-  }),
-);
+// 경주 중 화면을 클릭하면 2배속, 다시 클릭하면 1배속
+$('view').addEventListener('click', () => {
+  if (!game?.race?.started || game.race.done || !panel.hidden) return;
+  speedSelect.value = speedSelect.value === '2' ? '1' : '2';
+  applySpeed();
+});
+// 경주가 끝난 뒤 엔터를 누르면 바로 준비 화면으로
+addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && panel.hidden && game?.race?.done) {
+    e.preventDefault();
+    $('again').click();
+  }
+});
 
 boot();

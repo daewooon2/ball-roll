@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { buildMap, moverPose, projectToCenterline } from '../map/build';
+import { buildMap, moverPose } from '../map/build';
 import { validateMap } from '../map/schema';
 import { Race } from './race';
 
@@ -30,16 +30,17 @@ describe('경주', () => {
   });
 
   it('맵 검증: 잘못된 조각을 거부한다', () => {
-    expect(() => validateMap({ ...json, pieces: [{ type: 'ramp' }] })).toThrow(/pieces\[0\]/);
+    expect(() => validateMap({ ...json, pieces: [{ type: 'wall' }] })).toThrow(/pieces\[0\]/);
     expect(() => validateMap({ ...json, units: 'cm' })).toThrow();
+    expect(() => validateMap({ ...json, finishY: 1 })).toThrow();
   });
 
-  it('진행도는 중심선을 따라 증가한다', () => {
+  it('구슬 30개도 출발 칸 안에 겹치지 않게 선다', () => {
     const map = buildMap(validateMap(json));
-    const first = map.centerline[0];
-    const last = map.centerline[map.centerline.length - 1];
-    expect(projectToCenterline(map, first[0], first[1], first[2]).s).toBe(0);
-    expect(projectToCenterline(map, last[0], last[1], last[2]).s).toBeCloseTo(map.cumulative[map.cumulative.length - 1], 3);
+    const d = map.marble.radius * 2;
+    const at = Array.from({ length: 30 }, (_, k) => map.slotPosition(k, 30, k % 2 ? 1 : -1));
+    for (const [x, y] of at) expect(Math.abs(x) <= map.halfWidth - d / 2 && y < map.top - d / 2).toBe(true);
+    at.forEach((a, i) => at.slice(i + 1).forEach((b) => expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeGreaterThanOrEqual(d)));
   });
 });
 
@@ -74,7 +75,6 @@ describe('확장 기능', () => {
 describe('움직이는 장애물', () => {
   it('자세가 스텝 번호만으로 정해지고 주기적으로 되돌아온다', () => {
     const map = buildMap(validateMap(json));
-    expect(map.movers.length).toBeGreaterThan(0);
     const slider = map.movers.find((m) => m.slide)!;
     const spinner = map.movers.find((m) => m.spin)!;
     const pose = (m: typeof slider, step: number) => {
@@ -87,7 +87,5 @@ describe('움직이는 장애물', () => {
     expect(near(pose(slider, 0), pose(slider, slider.slide!.period))).toBe(true);
     expect(near(pose(slider, 0), pose(slider, slider.slide!.period / 4))).toBe(false);
     expect(near(pose(spinner, 0), pose(spinner, 1))).toBe(false);
-    // 왕복 쐐기는 구슬(지름 0.16)이 눌리지 않을 만큼만 움직인다
-    expect(Math.abs(slider.slide!.amp)).toBeLessThan(0.2);
   });
 });

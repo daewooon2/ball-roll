@@ -12,11 +12,11 @@ export interface SimBatch {
   /** 1등이 들어올 때까지 걸린 시간(초) */
   firstSec: number[];
   unfinished: number;
-  /** 끼임 임펄스·코스 이탈 복귀·미완주가 일어난 지점(m, 중심선 누적 길이) */
+  /** 끼임 임펄스·코스 이탈 복귀·미완주가 일어난 지점(m, 출발선에서 내려온 거리) */
   kickAt: number[];
   resetAt: number[];
   stuckAt: number[];
-  /** 중심선 꼭짓점들의 누적 길이(m). 위 지점이 어느 구간인지 볼 때 쓴다. */
+  /** 구간 시작 지점들(m). 위 지점이 어느 구간인지 볼 때 쓴다. */
   marks: number[];
 }
 
@@ -31,7 +31,7 @@ export function simulate(mapJson: unknown, seeds: number, marbles = 5, firstSeed
     kickAt: [],
     resetAt: [],
     stuckAt: [],
-    marks: map.cumulative.map((s) => s / WORLD_SCALE),
+    marks: map.marks.map((s) => s / WORLD_SCALE),
   };
   for (let s = 0; s < seeds; s++) {
     // 시드를 흩어 놓는다(연속 정수 시드끼리의 상관을 피함)
@@ -77,7 +77,7 @@ export function chiSquare(observed: number[]) {
   return observed.reduce((sum, o) => sum + (o - expected) ** 2 / expected, 0);
 }
 
-/** 지점들을 중심선 구간별로 센다. "구간번호:횟수" */
+/** 지점들을 구간별로 센다. "구간번호:횟수" */
 export function bySegment(points: number[], marks: number[]) {
   const counts = new Map<number, number>();
   for (const p of points) {

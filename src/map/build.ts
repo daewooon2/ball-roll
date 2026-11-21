@@ -1,36 +1,28 @@
 // 코스 JSON(m) → 물리 충돌체와 렌더 정보(unit). three, DOM을 쓰지 않는다.
-// 규칙: 굴러가는 면 하나는 cuboid 하나. 같은 평면의 cuboid를 맞대면 이음새에서 튄다(0단계 측정).
-import {
-  DT,
-  FLOOR_COLLIDER_THICKNESS as TC,
-  FLOOR_VISUAL_THICKNESS as TV,
-  WALL_THICKNESS as WT,
-  WORLD_SCALE as S,
-} from '../config';
+// 좌표: x = 판의 가로, y = 판의 위쪽, z = 판에서 솟는 쪽. 판 윗면이 z = 0, 구슬 중심은 z = 반지름.
+// 판을 기울이는 대신 중력을 기울인다(-y로 g·sin, -z로 g·cos). 판은 cuboid 하나라 이음새가 없다.
+import { DT, FLOOR_COLLIDER_THICKNESS as TC, GRAVITY, WALL_THICKNESS as WT, WORLD_SCALE as S } from '../config';
 import type { ColliderSpec, Material, Quat, Vec3 } from '../physics/world';
-import type { MapJson, RampPiece, V3 } from './schema';
+import type { MapJson } from './schema';
 
 export type Visual =
-  | { kind: 'box'; half: Vec3; pos: Vec3; rot: Quat }
-  | { kind: 'prism'; points: number[]; color: string }
-  | { kind: 'mesh'; vertices: number[]; indices: number[] };
-
-export interface PinSpec {
-  pos: Vec3;
-  rot: Quat;
-  radius: number;
-  height: number;
-  headRadius: number;
-  density: number;
-  friction?: number;
-  despawnY: number;
-}
+  | { kind: 'box'; half: Vec3; pos: Vec3; rot: Quat; color?: string; trap?: boolean }
+  | { kind: 'peg'; pos: Vec3; radius: number; height: number; color?: string; trap?: boolean }
+  | { kind: 'hole'; pos: Vec3; radius: number };
+// 벽의 둥근 끝(peg, color 'wood')은 렌더에서 벽과 같은 나무 재질로 합친다
 
 /** 움직이는 장애물(운동학 강체). 자세는 스텝 번호만으로 정해진다. */
 export interface MoverSpec {
-  /** 강체 기준 로컬 충돌체 */
+  /** 강체 기준 로컬 충돌체. 로컬 y가 판의 법선(z)이다. */
   colliders: ColliderSpec[];
-  visual: { kind: 'prism'; points: number[]; color: string } | { kind: 'boxes'; halves: Vec3[]; offset: Vec3; color: string };
+  halves: Vec3[];
+  /** 돌려 놓은 상자들(팔이 여러 개인 바람개비). 있으면 halves 대신 이것으로 그린다 */
+  parts?: { half: Vec3; pos: Vec3; rot: Quat }[];
+  /** 막대를 축에서 로컬 x로 이만큼 민 곳에 둔다(한쪽 끝이 축인 막대) */
+  shift: number;
+  /** 막대 양 끝의 잘 튕기는 빨간 끝(로컬 x 위치들) */
+  tips?: { half: Vec3; at: number[] };
+  color: string;
   pos: Vec3;
   rot: Quat;
   /** 0~1. 한 주기 안에서의 시작 위치 */
@@ -53,29 +45,41 @@ export function moverPose(m: MoverSpec, step: number, pos: Float32Array | number
 export interface BuiltMap {
   id: string;
   material: Material;
+  gravity: Vec3;
   marble: { radius: number; density: number; rolling: number };
   statics: ColliderSpec[];
   /** statics 안에서 결승 센서의 위치 */
   finishIndex: number;
-  finishTopY: number;
-  /** 이보다 아래로 떨어지면 코스 밖 */
-  floorY: number;
+  /** 결승선의 y. 진행도 = startY − y */
+  finishY: number;
+  startY: number;
+  /** 판 안쪽 범위 */
+  halfWidth: number;
+  top: number;
+  bottom: number;
+  wallH: number;
   visuals: Visual[];
-  pins: PinSpec[];
   movers: MoverSpec[];
-  gate: { pos: Vec3; rot: Quat; half: Vec3; up: Vec3; lift: number; liftSteps: number };
-  /** n개 중 k번째 출발 슬롯의 구슬 위치 */
-  slotPosition(k: number, n: number): Vec3;
-  /** 출발 지점의 [내리막 방향, 옆 방향] */
-  startAxes: [Vec3, Vec3];
-  centerline: Vec3[];
-  /** centerline 각 점까지의 누적 길이 */
-  cumulative: number[];
-  funnel?: { center: Vec3; rOuter: number; s: number };
+  /** 팝 범퍼: 중심에서 reach 안에 들어온 구슬을 speed로 바깥으로 튕긴다 */
+  poppers: { x: number; y: number; reach: number; speed: number }[];
+  /** 구멍 함정: 빠지면 to로 되돌아간다 */
+  holes: { x: number; y: number; r: number; to: [number, number]; max: number }[];
+  /** 닿으면 밀어내는 벽: 선분 a-b, 중심선에서 reach 안이면 닿은 것 */
+  kickWalls: { ax: number; ay: number; bx: number; by: number; reach: number; speed: number }[];
+  /** statics 안에서, 정리 단계에 사라지는 충돌체(결승 구간의 바닥)의 위치 */
+  trap: number[];
+  /** 결승 구간이 시작하는 높이(바닥의 가장 높은 곳). 바닥이 없으면 -Infinity */
+  trapY: number;
+  gate: { pos: Vec3; half: Vec3; lift: number; liftSteps: number };
+  /** n개 중 k번째 출발 슬롯의 구슬 위치. jitter(-1~1)만큼 슬롯 안에서 옆으로 옮긴다. */
+  slotPosition(k: number, n: number, jitter: number): Vec3;
+  /** 구간이 시작하는 진행도들(진단용) */
+  marks: number[];
+  /** 결승 입구. 없으면 null */
+  spot: [number, number] | null;
 }
 
 const rad = (deg: number) => (deg * Math.PI) / 180;
-const scale = (v: V3): Vec3 => [v[0] * S, v[1] * S, v[2] * S];
 
 function qmul(a: Quat, b: Quat): Quat {
   return [
@@ -85,269 +89,171 @@ function qmul(a: Quat, b: Quat): Quat {
     a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
   ];
 }
-function qrot(q: Quat, v: Vec3): Vec3 {
-  const [x, y, z, w] = q;
-  const tx = 2 * (y * v[2] - z * v[1]);
-  const ty = 2 * (z * v[0] - x * v[2]);
-  const tz = 2 * (x * v[1] - y * v[0]);
-  return [v[0] + w * tx + y * tz - z * ty, v[1] + w * ty + z * tx - x * tz, v[2] + w * tz + x * ty - y * tx];
-}
-/** yaw 0 → 로컬 x가 +x, yaw 90 → +z. */
-const qYaw = (deg: number): Quat => [0, Math.sin(-rad(deg) / 2), 0, Math.cos(-rad(deg) / 2)];
-/** 로컬 +x 쪽이 내려가게 기울인다. */
-const qSlope = (deg: number): Quat => [0, 0, Math.sin(-rad(deg) / 2), Math.cos(-rad(deg) / 2)];
-
-/** 조각의 로컬 좌표계. 로컬 x = 진행 방향, y = 면의 법선, z = 옆. */
-class Frame {
-  constructor(
-    readonly origin: Vec3,
-    readonly rot: Quat,
-  ) {}
-  at(local: Vec3): Vec3 {
-    const r = qrot(this.rot, local);
-    return [this.origin[0] + r[0], this.origin[1] + r[1], this.origin[2] + r[2]];
-  }
-  dir(local: Vec3): Vec3 {
-    return qrot(this.rot, local);
-  }
-}
+/** 판 위에서(z축 둘레로) 돌린다. */
+const qZ = (deg: number): Quat => [0, 0, Math.sin(rad(deg) / 2), Math.cos(rad(deg) / 2)];
+/** 로컬 y를 판의 법선(z)으로 세운다. 원기둥과 움직이는 장애물의 축. */
+const UP: Quat = [Math.SQRT1_2, 0, 0, Math.SQRT1_2];
 
 export function buildMap(json: MapJson): BuiltMap {
   const statics: ColliderSpec[] = [];
   const visuals: Visual[] = [];
-  const pins: PinSpec[] = [];
   const movers: MoverSpec[] = [];
-  const line: Vec3[] = [];
-  const frames = new Map<string, Frame>();
-  const ramps = new Map<string, RampPiece>();
+  const poppers: BuiltMap['poppers'] = [];
+  const holes: BuiltMap['holes'] = [];
+  const kickWalls: BuiltMap['kickWalls'] = [];
+  const trap: number[] = [];
+  let trapY = -Infinity;
   const r = json.marble.radius * S;
-  const marbleMass = json.marble.density * (4 / 3) * Math.PI * r ** 3;
-  let finishIndex = -1;
-  let finishTopY = 0;
-  let floorY = Infinity;
-  let funnel: BuiltMap['funnel'];
+  const H = json.wallH * S;
+  const hw = (json.width * S) / 2;
+  const top = json.top * S;
+  const bottom = json.bottom * S;
+  const midY = (top + bottom) / 2;
+  const halfLen = (top - bottom) / 2;
+  const startY = json.start.y * S;
+  const finishY = json.finishY * S;
 
-  /** 충돌체와 렌더가 같은 상자 */
-  const box = (f: Frame, center: Vec3, half: Vec3) => {
-    const pos = f.at(center);
-    statics.push({ shape: { kind: 'box', half }, pos, rot: f.rot });
-    visuals.push({ kind: 'box', half, pos, rot: f.rot });
+  /** 충돌체와 렌더가 같은 블록. 판 위에 서 있고 높이는 벽 높이. */
+  const box = (x: number, y: number, hx: number, hy: number, deg = 0, color?: string, isTrap?: boolean, restitution?: number) => {
+    const pos: Vec3 = [x, y, H / 2];
+    const half: Vec3 = [hx, hy, H / 2];
+    const rot = qZ(deg);
+    if (isTrap) trap.push(statics.length);
+    statics.push({ shape: { kind: 'box', half }, pos, rot, restitution });
+    visuals.push({ kind: 'box', half, pos, rot, color, trap: isTrap });
   };
+
+  // 판(아래로 두껍게: 터널링 방지), 유리 덮개(구슬이 서로 올라타지 못하게), 테두리
+  statics.push({ shape: { kind: 'box', half: [hw + WT, halfLen + WT, TC / 2] }, pos: [0, midY, -TC / 2] });
+  visuals.push({ kind: 'box', half: [hw + WT, halfLen + WT, 0.05], pos: [0, midY, -0.05], rot: [0, 0, 0, 1], color: 'plate' });
+  statics.push({ shape: { kind: 'box', half: [hw + WT, halfLen + WT, TC / 2] }, pos: [0, midY, H + TC / 2], friction: 0 });
+  for (const side of [-1, 1]) {
+    box(side * (hw + WT / 2), midY, WT / 2, halfLen + WT);
+    box(0, midY + side * (halfLen + WT / 2), hw, WT / 2);
+  }
+
+  const finishIndex = statics.length;
+  statics.push({ shape: { kind: 'box', half: [hw, (finishY - bottom) / 4, H / 2] }, pos: [0, finishY - (finishY - bottom) / 4, H / 2], sensor: true });
 
   for (const p of json.pieces) {
     switch (p.type) {
-      case 'ramp': {
-        const f = new Frame(scale(p.pos), qmul(qYaw(p.yawDeg), qSlope(p.slopeDeg)));
-        frames.set(p.id, f);
-        ramps.set(p.id, p);
-        const L = p.length * S;
-        const hw = (p.width * S) / 2 + WT;
-        const tc = p.thickness ? p.thickness * S : TC;
-        // 바닥: 충돌체는 아래로 두껍게, 렌더는 얇게
-        statics.push({ shape: { kind: 'box', half: [L / 2, tc / 2, hw] }, pos: f.at([L / 2, -tc / 2, 0]), rot: f.rot });
-        visuals.push({ kind: 'box', half: [L / 2, TV / 2, hw] as Vec3, pos: f.at([L / 2, -TV / 2, 0]), rot: f.rot });
-        const rails = p.rails ?? [p.railH, p.railH];
-        [-1, 1].forEach((side, i) => {
-          const h = rails[i] * S;
-          if (h > 0) box(f, [L / 2, h / 2, side * (hw - WT / 2)], [L / 2, h / 2, WT / 2]);
-        });
-        if (p.backWall) box(f, [-WT / 2, (p.backWall * S) / 2, 0], [WT / 2, (p.backWall * S) / 2, hw]);
-        line.push(f.at([0, r, 0]), f.at([L, r, 0]));
-        break;
-      }
-      case 'drop': {
-        const f = new Frame(scale(p.pos), qYaw(p.yawDeg));
-        const [len, h, w] = scale(p.size);
-        box(f, [len + WT / 2, h / 2, 0], [WT / 2, h / 2, w / 2 + WT]);
-        for (const side of [-1, 1])
-          if (p.open !== (side > 0 ? '+z' : '-z'))
-            box(f, [len / 2, h / 2, side * (w / 2 + WT / 2)], [len / 2, h / 2, WT / 2]);
-        break;
-      }
-      case 'wedge': {
-        const base = frames.get(p.on)!;
-        const f = new Frame(base.at([p.at[0] * S, 0, p.at[1] * S]), qmul(base.rot, qYaw(p.yawDeg ?? 0)));
-        const [w, h, l] = scale(p.size);
-        const local: Vec3[] = [];
-        // 꼭짓점이 오르막(-x)을 향한다. 고정 쐐기는 판에 2mm 묻어 틈을 없애고, 움직이는 쐐기는 1mm 띄운다.
-        for (const y of [(p.slide ? 0.001 : -0.002) * S, h])
-          for (const [x, z] of [
-            [-l / 2, 0],
-            [l / 2, -w / 2],
-            [l / 2, w / 2],
-          ])
-            local.push([x, y, z]);
-        const color = p.color ?? 'red';
-        if (p.slide) {
-          const points = local.flat();
-          movers.push({
-            colliders: [{ shape: { kind: 'hull', points }, pos: [0, 0, 0] }],
-            visual: { kind: 'prism', points, color },
-            pos: f.origin,
-            rot: f.rot,
-            phase: p.slide.phase ?? 0,
-            slide: { dir: base.dir([0, 0, 1]), amp: p.slide.amp * S, period: p.slide.period / DT },
-          });
-        } else {
-          const points = local.flatMap((v) => f.at(v));
-          statics.push({ shape: { kind: 'hull', points }, pos: [0, 0, 0] });
-          visuals.push({ kind: 'prism', points, color });
-        }
-        break;
-      }
-      case 'spinner': {
-        // 판의 법선을 축으로 도는 막대(또는 십자). 바닥에서 1mm 떠 있다.
-        const base = frames.get(p.on)!;
-        const half: Vec3 = [(p.length * S) / 2, 0.0075 * S, 0.004 * S];
-        const offset: Vec3 = [0, half[1] + 0.001 * S, 0];
-        const halves: Vec3[] = p.cross ? [half, [half[2], half[1], half[0]]] : [half];
-        movers.push({
-          colliders: halves.map((h) => ({ shape: { kind: 'box', half: h }, pos: offset })),
-          visual: { kind: 'boxes', halves, offset, color: p.color ?? 'red' },
-          pos: base.at([p.at[0] * S, 0, p.at[1] * S]),
-          rot: base.rot,
-          phase: p.phase ?? 0,
-          spin: ((p.rpm * 2 * Math.PI) / 60) * DT,
-        });
-        break;
-      }
-      case 'pins': {
-        const base = frames.get(p.on)!;
-        const radius = p.radius * S;
-        const height = p.height * S;
-        const headRadius = radius * 1.25;
-        const volume = Math.PI * radius ** 2 * height + (4 / 3) * Math.PI * headRadius ** 3;
-        const density = (p.massRatio * marbleMass) / volume;
-        const gap = p.spacing * S;
-        p.layout.split('-').forEach((count, row) => {
-          for (let c = 0; c < +count; c++) {
-            const pos = base.at([
-              p.at[0] * S - row * gap * (Math.sqrt(3) / 2),
-              0,
-              p.at[1] * S + (c - (+count - 1) / 2) * gap,
-            ]);
-            pins.push({ pos, rot: base.rot, radius, height, headRadius, density, friction: p.friction, despawnY: pos[1] - p.despawnDrop * S });
+      case 'wall': {
+        const [ax, ay] = p.a;
+        const [bx, by] = p.b;
+        const t = (p.t ?? 0.006) * S;
+        if (p.trap) trapY = Math.max(trapY, ay * S, by * S);
+        if (p.pop) kickWalls.push({ ax: ax * S, ay: ay * S, bx: bx * S, by: by * S, reach: t / 2 + r + 0.01, speed: p.pop * S });
+        box(((ax + bx) / 2) * S, ((ay + by) / 2) * S, (Math.hypot(bx - ax, by - ay) * S) / 2, t / 2, (Math.atan2(by - ay, bx - ax) * 180) / Math.PI, p.color, p.trap, p.bounce);
+        // 양 끝에 둥근 마개: 꺾여 이어지는 벽의 모서리가 틈이나 튀어나온 끝 없이 둥글게 이어진다
+        if (!p.flush)
+          for (const [cx, cy] of [p.a, p.b]) {
+            const pos: Vec3 = [cx * S, cy * S, H / 2];
+            if (p.trap) trap.push(statics.length);
+            statics.push({ shape: { kind: 'cylinder', halfHeight: H / 2, radius: t / 2 }, pos, rot: UP, restitution: p.bounce });
+            visuals.push({ kind: 'peg', pos, radius: t / 2, height: H, color: p.color ?? 'wood', trap: p.trap });
           }
+        break;
+      }
+      case 'box':
+        box(p.at[0] * S, p.at[1] * S, (p.size[0] * S) / 2, (p.size[1] * S) / 2, p.deg, p.color);
+        break;
+      case 'hole':
+        holes.push({ x: p.at[0] * S, y: p.at[1] * S, r: p.r * S, to: [p.to[0] * S, p.to[1] * S], max: p.max ?? 2 });
+        visuals.push({ kind: 'hole', pos: [p.at[0] * S, p.at[1] * S, 0], radius: p.r * S });
+        break;
+      case 'peg': {
+        const pos: Vec3 = [p.at[0] * S, p.at[1] * S, H / 2];
+        statics.push({ shape: { kind: 'cylinder', halfHeight: H / 2, radius: p.r * S }, pos, rot: UP, restitution: p.bounce });
+        visuals.push({ kind: 'peg', pos, radius: p.r * S, height: H, color: p.color });
+        if (p.pop) poppers.push({ x: pos[0], y: pos[1], reach: p.r * S + r + 0.01, speed: p.pop * S });
+        break;
+      }
+      case 'spinner':
+      case 'slider': {
+        // 판에서 0.1mm 떠 있다. 로컬 좌표는 [가로, 법선, 세로].
+        const hy = H / 2 - 0.01;
+        let halves: Vec3[];
+        const shift = p.type === 'spinner' && p.end ? (p.length * S) / 2 : 0;
+        let parts: MoverSpec['parts'];
+        let tips: MoverSpec['tips'];
+        if (p.type === 'spinner' && p.arms) {
+          // 중심에서 팔 arms개가 고르게 뻗는 바람개비. 팔 길이는 length/2
+          const R = (p.length * S) / 2;
+          parts = Array.from({ length: p.arms }, (_, k) => {
+            const t = (2 * Math.PI * k) / p.arms!;
+            return { half: [R / 2, hy, 0.004 * S] as Vec3, pos: [(Math.cos(t) * R) / 2, 0, (-Math.sin(t) * R) / 2] as Vec3, rot: [0, Math.sin(t / 2), 0, Math.cos(t / 2)] as Quat };
+          });
+          halves = [];
+        } else if (p.type === 'spinner') {
+          const arm: Vec3 = [(p.length * S) / 2, hy, ((p.thick ?? 0.008) * S) / 2];
+          halves = p.cross ? [arm, [arm[2], hy, arm[0]]] : [arm];
+          if (p.tips && !p.cross) {
+            const tl = (p.tips * S) / 2;
+            tips = { half: [tl, hy + 0.005, arm[2] + 0.005], at: [shift - arm[0] + tl, shift + arm[0] - tl] };
+            // 본체는 빨간 끝 앞에서 끊는다. 겹치면 구슬이 본체(잘 안 튕김)에도 같이 닿아 튕김이 약해진다.
+            halves = [[arm[0] - 2 * tl, hy, arm[2]]];
+          }
+        } else halves = [[(p.size[0] * S) / 2, hy, (p.size[1] * S) / 2]];
+        movers.push({
+          // 마찰 0: 막대와 벽 사이에 낀 구슬이 물리지 않고 벌어진 쪽으로 미끄러져 나온다
+          colliders: [
+            ...(parts
+              ? parts.map(({ half, pos, rot }) => ({ shape: { kind: 'box' as const, half }, pos, rot, friction: 0 }))
+              : halves.map((half) => ({ shape: { kind: 'box' as const, half }, pos: [shift, 0, 0] as Vec3, friction: 0 }))),
+            // 빨간 끝은 막대보다 0.5mm 두꺼워 먼저 닿는다
+            ...(tips ? tips.at.map((x) => ({ shape: { kind: 'box' as const, half: tips.half }, pos: [x, 0, 0] as Vec3, friction: 0, restitution: 1.3 })) : []),
+          ],
+          halves,
+          parts,
+          shift,
+          tips,
+          color: p.color ?? 'red',
+          pos: [p.at[0] * S, p.at[1] * S, H / 2],
+          rot: p.type === 'slider' && p.deg ? qmul(qZ(p.deg), UP) : UP,
+          phase: p.phase ?? 0,
+          ...(p.type === 'spinner'
+            ? { spin: ((p.rpm * 2 * Math.PI) / 60) * DT }
+            : { slide: { dir: [1, 0, 0] as Vec3, amp: p.amp * S, period: p.period / DT } }),
         });
-        break;
-      }
-      case 'funnel': {
-        const c = scale(p.pos);
-        const rI = p.rInner * S;
-        const rO = p.rOuter * S;
-        const H = (rO - rI) * Math.tan(rad(p.angleDeg));
-        const N = p.segments;
-        const vertices: number[] = [];
-        const indices: number[] = [];
-        for (let k = 0; k < N; k++) {
-          const a = (k / N) * 2 * Math.PI;
-          const cos = Math.cos(a);
-          const sin = Math.sin(a);
-          vertices.push(c[0] + rI * cos, c[1], c[2] + rI * sin);
-          vertices.push(c[0] + rO * cos, c[1] + H, c[2] + rO * sin);
-          vertices.push(c[0] + rO * cos, c[1] + H + p.rimH * S, c[2] + rO * sin);
-          const i = k * 3;
-          const j = ((k + 1) % N) * 3;
-          // 감기 방향 통일: 법선이 구슬이 구르는 쪽(위·안쪽)을 향한다
-          indices.push(i, j, i + 1, j, j + 1, i + 1); // 원뿔면
-          indices.push(i + 1, j + 1, i + 2, j + 1, j + 2, i + 2); // 테두리 벽
-        }
-        statics.push({ shape: { kind: 'trimesh', vertices, indices }, pos: [0, 0, 0] });
-        visuals.push({ kind: 'mesh', vertices, indices });
-        line.push([c[0], c[1] + H, c[2]], c);
-        funnel = { center: [c[0], c[1] + H, c[2]], rOuter: rO, s: 0 };
-        break;
-      }
-      case 'finish': {
-        const c = scale(p.pos);
-        const half = scale(p.size).map((v) => v / 2) as Vec3;
-        const [tw, depth, td] = scale(p.tray);
-        const f = new Frame([c[0], c[1] - half[1] - depth, c[2]], [0, 0, 0, 1]);
-        finishIndex = statics.length;
-        finishTopY = c[1] + half[1];
-        statics.push({ shape: { kind: 'box', half }, pos: c, sensor: true });
-        // 받침 상자: 바닥 + 벽 4개
-        statics.push({ shape: { kind: 'box', half: [tw / 2 + WT, TC / 2, td / 2 + WT] }, pos: f.at([0, -TC / 2, 0]) });
-        visuals.push({ kind: 'box', half: [tw / 2 + WT, TV / 2, td / 2 + WT], pos: f.at([0, -TV / 2, 0]), rot: f.rot });
-        const wh = depth / 2;
-        for (const side of [-1, 1]) {
-          box(f, [side * (tw / 2 + WT / 2), wh, 0], [WT / 2, wh, td / 2 + WT]);
-          box(f, [0, wh, side * (td / 2 + WT / 2)], [tw / 2, wh, WT / 2]);
-        }
-        floorY = f.origin[1] - TC;
-        line.push(c);
         break;
       }
     }
   }
 
-  const centerline = json.centerline ? json.centerline.map(scale) : line;
-  const cumulative = [0];
-  for (let i = 1; i < centerline.length; i++) {
-    const a = centerline[i - 1];
-    const b = centerline[i];
-    cumulative.push(cumulative[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
-  }
-
-  // 출발 게이트
-  const sf = frames.get(json.start.on)!;
-  const sr = ramps.get(json.start.on)!;
-  const at = json.start.at * S;
-  const barHalf: Vec3 = [0.002 * S, r * 1.5, (sr.width * S) / 2];
-  const pitch = 2 * r + 0.0002 * S; // 뒷줄과의 간격
-  const slotW = json.start.slotWidth * S;
-
-  const map: BuiltMap = {
+  const tilt = rad(json.tiltDeg);
+  const barHalf = 0.003 * S;
+  const pitch = 2 * r + 0.002 * S; // 윗줄과의 간격
+  return {
     id: json.id,
     material: { friction: json.marble.friction, restitution: json.marble.restitution },
+    gravity: [0, -GRAVITY * Math.sin(tilt), -GRAVITY * Math.cos(tilt)],
     marble: { radius: r, density: json.marble.density, rolling: json.marble.rollingResistance },
     statics,
     finishIndex,
-    finishTopY,
-    floorY,
+    finishY,
+    startY,
+    halfWidth: hw,
+    top,
+    bottom,
+    wallH: H,
     visuals,
-    pins,
     movers,
-    gate: {
-      pos: sf.at([at, barHalf[1], 0]),
-      rot: sf.rot,
-      half: barHalf,
-      up: sf.dir([0, 1, 0]),
-      lift: 0.03 * S,
-      liftSteps: Math.max(1, Math.round(json.start.liftTime / DT)),
-    },
-    slotPosition(k, n) {
+    poppers,
+    holes,
+    kickWalls,
+    trap,
+    trapY,
+    // 게이트는 판에서 솟아올라(+z) 길을 연다
+    gate: { pos: [0, startY - barHalf, H / 2], half: [hw, barHalf, H / 2], lift: H + 0.1, liftSteps: Math.max(1, Math.round(json.start.liftTime / DT)) },
+    slotPosition(k, n, jitter) {
+      // 한 줄을 폭 전체에 고르게 편다. 슬롯이 넓으면 그 안에서 흩을 여유도 크다.
       const cols = Math.min(n, json.start.slots);
       const row = Math.floor(k / json.start.slots);
       const col = k % json.start.slots;
-      return sf.at([at - barHalf[0] - r - 0.0001 * S - row * pitch, r, (col - (cols - 1) / 2) * slotW]);
+      const slotW = Math.max(json.start.slotWidth * S, (2 * hw) / cols);
+      return [(col - (cols - 1) / 2) * slotW + jitter * (slotW / 2 - r - 0.001 * S), startY + r + 0.001 * S + row * pitch, r];
     },
-    startAxes: [sf.dir([1, 0, 0]), sf.dir([0, 0, 1])],
-    centerline,
-    cumulative,
-    funnel,
+    marks: (json.marks ?? []).map((y) => startY - y * S),
+    spot: json.spot ? [json.spot[0] * S, json.spot[1] * S] : null,
   };
-  if (funnel) funnel.s = projectToCenterline(map, ...funnel.center).s;
-  return map;
-}
-
-/** 점 p에서 중심선까지: 누적 길이 s, 거리, 최근접점, 그 구간의 진행 방향. */
-export function projectToCenterline(map: BuiltMap, px: number, py: number, pz: number) {
-  const { centerline: line, cumulative } = map;
-  let best = { s: 0, dist: Infinity, point: line[0], tangent: [1, 0, 0] as Vec3 };
-  for (let i = 1; i < line.length; i++) {
-    const a = line[i - 1];
-    const b = line[i];
-    const d: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    const len2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-    if (len2 === 0) continue;
-    const t = Math.min(1, Math.max(0, ((px - a[0]) * d[0] + (py - a[1]) * d[1] + (pz - a[2]) * d[2]) / len2));
-    const q: Vec3 = [a[0] + d[0] * t, a[1] + d[1] * t, a[2] + d[2] * t];
-    const dist = Math.hypot(px - q[0], py - q[1], pz - q[2]);
-    if (dist < best.dist) {
-      const len = Math.sqrt(len2);
-      best = { s: cumulative[i - 1] + len * t, dist, point: q, tangent: [d[0] / len, d[1] / len, d[2] / len] };
-    }
-  }
-  return best;
 }

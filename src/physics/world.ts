@@ -97,8 +97,11 @@ export class PhysicsWorld {
   /** 직전 step()에서 시작된 센서 교차 [충돌체 핸들, 충돌체 핸들]. */
   readonly sensorEvents: [number, number][] = [];
 
-  constructor(private material: Material) {
-    this.world = new RAPIER.World({ x: 0, y: -GRAVITY, z: 0 });
+  constructor(
+    private material: Material,
+    gravity: Vec3 = [0, -GRAVITY, 0],
+  ) {
+    this.world = new RAPIER.World(v3(gravity));
     this.world.timestep = DT;
   }
 
@@ -133,6 +136,8 @@ export class PhysicsWorld {
     if (spec.rot) d.setRotation(q4(spec.rot));
     if (spec.density !== undefined) d.setDensity(spec.density);
     if (spec.friction === 0) d.setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
+    // 잘 튕기는 것(반발 1 이상)은 구슬의 반발과 평균 내지 않고 큰 값을 쓴다
+    if ((spec.restitution ?? 0) >= 1) d.setRestitutionCombineRule(RAPIER.CoefficientCombineRule.Max);
     if (spec.sensor) d.setSensor(true).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     return d;
   }
@@ -140,6 +145,10 @@ export class PhysicsWorld {
   /** 고정 충돌체. 충돌체 핸들을 돌려준다. */
   addStatic(spec: ColliderSpec): number {
     return this.world.createCollider(this.desc(spec)).handle;
+  }
+
+  removeStatic(handle: number) {
+    this.world.removeCollider(this.world.getCollider(handle), false);
   }
 
   /** 동적 강체. colliders의 pos/rot은 강체 기준 로컬 좌표. */

@@ -41,7 +41,7 @@ try {
     console.log(`카이제곱: ${sim.chiSquare(r.slotWins).toFixed(2)} (구슬 5개 기준 임계값 9.49)`);
     console.log(`경주 시간 중앙값: ${sim.median(r.raceSec).toFixed(1)}초 (최소 ${Math.min(...r.raceSec).toFixed(1)}, 최대 ${Math.max(...r.raceSec).toFixed(1)}), 1등 도착 중앙값 ${sim.median(r.firstSec).toFixed(1)}초`);
     console.log(`미완주: ${r.unfinished}개, 끼임 임펄스: ${r.kickAt.length}회, 코스 이탈 복귀: ${r.resetAt.length}회`);
-    console.log(`구간별(중심선 구간 번호:횟수) 미완주 ${sim.bySegment(r.stuckAt, r.marks)} | 임펄스 ${sim.bySegment(r.kickAt, r.marks)} | 복귀 ${sim.bySegment(r.resetAt, r.marks)}`);
+    console.log(`구간별(구간 번호:횟수) 미완주 ${sim.bySegment(r.stuckAt, r.marks)} | 임펄스 ${sim.bySegment(r.kickAt, r.marks)} | 복귀 ${sim.bySegment(r.resetAt, r.marks)}`);
   }
 } finally {
   await server.close();

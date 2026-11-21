@@ -10,4 +10,11 @@ it('이름*개수, 이름/가중치를 읽는다', () => {
   ]);
   expect(parseNames('가*100')).toHaveLength(30); // 최대 30개
   expect(parseNames('*3, /2')).toEqual([]);
+  // 기호 앞뒤에 띄어쓰기가 있어도 된다
+  expect(parseNames('자두 * 3, 포도 / 2')).toEqual([
+    { name: '자두', weight: 1 },
+    { name: '자두', weight: 1 },
+    { name: '자두', weight: 1 },
+    { name: '포도', weight: 2 },
+  ]);
 });

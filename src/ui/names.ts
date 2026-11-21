@@ -11,12 +11,12 @@ export function parseNames(text: string): Entry[] {
     let token = raw.trim();
     let count = 1;
     let weight = 1;
-    const c = token.match(/\*(\d+)$/);
+    const c = token.match(/\s*[*×]\s*(\d+)$/); // '자두*10', '자두 * 10', '자두×10'
     if (c) {
       count = +c[1];
       token = token.slice(0, c.index).trim();
     }
-    const w = token.match(/\/(\d+(?:\.\d+)?)$/);
+    const w = token.match(/\s*\/\s*(\d+(?:\.\d+)?)$/);
     if (w) {
       weight = Math.min(10, Math.max(0.1, +w[1]));
       token = token.slice(0, w.index).trim();
@@ -29,3 +29,9 @@ export function parseNames(text: string): Entry[] {
 
 /** 구슬마다 다른 색. 황금각으로 색상을 돌린다. */
 export const marbleColor = (i: number) => `hsl(${Math.round((i * 137.5) % 360)}, 72%, 56%)`;
+
+/** 구슬별 색. 이름이 같으면 같은 색(처음 나온 순서대로 색을 붙인다). */
+export function entryColors(entries: { name: string }[]) {
+  const order = new Map<string, number>();
+  return entries.map((e) => marbleColor(order.get(e.name) ?? order.set(e.name, order.size).get(e.name)!));
+}
