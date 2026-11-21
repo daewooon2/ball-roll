@@ -308,3 +308,7 @@ code {
 #tap-hint[hidden] {
   display: none;
 }
+
+.hint.links a {
+  color: var(--dim);
+}

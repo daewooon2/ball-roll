@@ -4,4 +4,12 @@
     <loc>https://daewooon2.github.io/ball-roll/</loc>
     <changefreq>weekly</changefreq>
   </url>
+  <url>
+    <loc>https://daewooon2.github.io/ball-roll/guide.html</loc>
+    <changefreq>monthly</changefreq>
+  </url>
+  <url>
+    <loc>https://daewooon2.github.io/ball-roll/privacy.html</loc>
+    <changefreq>yearly</changefreq>
+  </url>
 </urlset>
